@@ -18,6 +18,9 @@ yarn-error.log*
 # Session data
 session/
 
+# Bot users data
+data/
+
 # Operating System Files
 .DS_Store
 Thumbs.db
