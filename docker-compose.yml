@@ -6,11 +6,20 @@ services:
     container_name: whatsapp-bot
     network_mode: host  # Allows accessing localhost services on host
     restart: unless-stopped
+    extra_hosts:
+      - "homeassistant.local:192.168.1.100"  # Reemplaza con la IP real de tu Home Assistant
     environment:
       - OLLAMA_API_URL=${OLLAMA_API_URL:-http://localhost:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-mi-bot}
       - PORT=${PORT:-3000}
       - COMMAND_PREFIX=${COMMAND_PREFIX:-!ia}
+      - HOMEASSISTANT_URL=${HOMEASSISTANT_URL:-http://homeassistant.local:8123}
+      - AREA_CONTROL_WEBHOOK_ID=${AREA_CONTROL_WEBHOOK_ID:-area_control}
+      - ADMIN_NUMBERS=${ADMIN_NUMBERS}
+      - ENABLE_FUNCTION_CALLS=${ENABLE_FUNCTION_CALLS:-true}
+      - DEFAULT_CITY=${DEFAULT_CITY:-Madrid}
+      - DEFAULT_LATITUDE=${DEFAULT_LATITUDE:-40.416775}
+      - DEFAULT_LONGITUDE=${DEFAULT_LONGITUDE:--3.703790}
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
     volumes:
       - ./session:/app/session

@@ -5,7 +5,10 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "dev": "nodemon bot.js"
+    "dev": "nodemon bot.js",
+    "status": "node status.js",
+    "clean": "bash clean-session.sh",
+    "restart": "bash restart-bot.sh"
   },
   "author": "",
   "license": "ISC",

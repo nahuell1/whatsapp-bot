@@ -14,7 +14,10 @@ const CONFIG = {
   OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'mi-bot',
   PORT: parseInt(process.env.PORT || '3000', 10),
   SESSION_DIR: process.env.SESSION_DIR || path.resolve(__dirname, 'session'),
-  COMMAND_PREFIX: process.env.COMMAND_PREFIX || '!ia'
+  COMMAND_PREFIX: process.env.COMMAND_PREFIX || '!ia',
+  HOMEASSISTANT_URL: process.env.HOMEASSISTANT_URL || 'http://localhost:8123',
+  WEBHOOK_API_KEY: process.env.WEBHOOK_API_KEY || '',
+  REQUIRE_WEBHOOK_AUTH: process.env.REQUIRE_WEBHOOK_AUTH === 'true'
 };
 
 // Initialize WhatsApp client
@@ -55,6 +58,34 @@ client.on('auth_failure', msg => {
 
 client.on('ready', () => {
   console.log('✅ WhatsApp client connected and ready');
+  // Pass client reference to commands that need it
+  commands.setClientInCommands(client);
+  
+  // Pass client reference to webhooks that need it
+  if (typeof webhooks.setClientInWebhooks === 'function') {
+    webhooks.setClientInWebhooks(client);
+  }
+  
+  // Pass client reference to the chatbot handler
+  const chatbotHandler = require('./commands/chatbotCommand');
+  if (typeof chatbotHandler.setClient === 'function') {
+    chatbotHandler.setClient(client);
+    console.log('✅ Chatbot handler initialized');
+  }
+  
+  // Connect the subscription notification system to webhooks
+  try {
+    // Import direct reference to notifySubscribers from subscribeCommand
+    const { notifySubscribers } = require('./commands/subscribeCommand');
+    
+    // Set the notifier in webhookUtils
+    if (typeof notifySubscribers === 'function') {
+      webhookUtils.setNotifier(notifySubscribers);
+      console.log('✅ Notification system connected to webhooks');
+    }
+  } catch (error) {
+    console.error('Error connecting notification system:', error);
+  }
 });
 
 client.on('loading_screen', (percent, message) => {
@@ -66,46 +97,34 @@ client.on('disconnected', reason => {
   lastQR = null;
 });
 
+// Load command and webhook handlers
+const commands = require('./commands');
+const webhooks = require('./webhooks');
+
+// Import webhook utilities
+const webhookUtils = require('./webhooks/webhookUtils');
+
+// Import chatbot handler for non-command messages
+const chatbotHandler = require('./commands/chatbotCommand');
+
 // Handle incoming messages
 client.on('message', async msg => {
   console.log('Message received:', msg.body);
   
-  // Only process messages starting with the command prefix
-  if (msg.body.startsWith(CONFIG.COMMAND_PREFIX)) {
-    const prompt = msg.body.slice(CONFIG.COMMAND_PREFIX.length).trim();
-    
-    if (!prompt) {
-      msg.reply('Por favor, enviá un mensaje después del comando !ia');
-      return;
-    }
-    
-    console.log('Processing AI prompt:', prompt);
-    
-    try {
-      // Call Ollama API
-      const response = await fetch(`${CONFIG.OLLAMA_API_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: CONFIG.OLLAMA_MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          stream: false
-        })
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Ollama responded with status ${response.status}: ${await response.text()}`);
-      }
-      
-      const data = await response.json();
-      console.log('AI response received successfully');
-      
-      // Extract the response content based on Ollama's response format
-      const aiResponse = data.message?.content || data.response || 'No clear response from AI';
-      msg.reply(aiResponse);
-    } catch (error) {
-      console.error('Error calling Ollama:', error);
-      msg.reply(`Error connecting to AI: ${error.message}`);
+  // Let the command handler process the message
+  // It will return true if a command was handled
+  const wasHandled = await commands.handleMessage(msg);
+  
+  if (!wasHandled) {
+    // If the message starts with the command prefix but wasn't handled
+    if (msg.body.startsWith(CONFIG.COMMAND_PREFIX)) {
+      console.log('No command matched, but message has command prefix');
+      msg.reply('Comando no reconocido. Envía !help para ver los comandos disponibles.');
+    } 
+    // If message doesn't start with a command prefix, handle as chatbot
+    else if (!msg.body.startsWith('!')) {
+      // Pass to chatbot handler
+      await chatbotHandler.handleChatbotMessage(msg, msg.body);
     }
   }
 });
@@ -172,7 +191,61 @@ app.get('/qr.png', async (_, res) => {
   }
 });
 
+// Middleware to verify API key for webhooks
+const verifyWebhookApiKey = (req, res, next) => {
+  if (!CONFIG.REQUIRE_WEBHOOK_AUTH) {
+    return next(); // Skip authentication if not required
+  }
+  
+  const apiKey = req.headers['x-api-key'];
+  
+  // No API key in environment, but we're requiring auth
+  if (!CONFIG.WEBHOOK_API_KEY) {
+    console.error('Webhook authentication is required but no API key is configured');
+    return res.status(500).json({ error: 'Server configuration error' });
+  }
+  
+  // No API key provided or incorrect key
+  if (!apiKey || apiKey !== CONFIG.WEBHOOK_API_KEY) {
+    console.error('Invalid or missing API key for webhook request');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  
+  // API key is valid
+  next();
+};
+
+// Webhook endpoint for Home Assistant integration
+app.post('/webhook/:id', express.json(), verifyWebhookApiKey, async (req, res) => {
+  const webhookId = req.params.id;
+  const data = req.body;
+  
+  console.log(`Received webhook request for: ${webhookId}`);
+  
+  try {
+    const result = await webhooks.handleWebhook(webhookId, data);
+    
+    if (result.error) {
+      console.error(`Webhook error (${webhookId}):`, result.message);
+      res.status(400).json({ error: result.message });
+    } else {
+      console.log(`Webhook processed (${webhookId}):`, result);
+      res.status(200).json(result);
+    }
+  } catch (error) {
+    console.error(`Webhook execution error (${webhookId}):`, error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Available webhooks listing endpoint (useful for debugging)
+app.get('/webhooks', verifyWebhookApiKey, (_, res) => {
+  const webhookInfo = webhooks.getWebhooksInfo();
+  res.json({ webhooks: webhookInfo });
+});
+
 // Start the web server
 app.listen(CONFIG.PORT, '0.0.0.0', () => {
-  console.log(`QR code server running at http://0.0.0.0:${CONFIG.PORT}/`);
+  console.log(`Bot server running at http://0.0.0.0:${CONFIG.PORT}/`);
+  console.log(`Webhooks available at http://0.0.0.0:${CONFIG.PORT}/webhook/:id`);
 });
