@@ -1,0 +1,19 @@
+# WhatsApp Bot with Ollama Integration
+
+services:
+  whatsapp-bot:
+    build: .
+    container_name: whatsapp-bot
+    network_mode: host  # Allows accessing localhost services on host
+    restart: unless-stopped
+    environment:
+      - OLLAMA_API_URL=${OLLAMA_API_URL:-http://localhost:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-mi-bot}
+      - PORT=${PORT:-3000}
+      - COMMAND_PREFIX=${COMMAND_PREFIX:-!ia}
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+    volumes:
+      - ./session:/app/session
+    # Uncomment for debugging
+    # ports:
+    #   - "3000:3000"
