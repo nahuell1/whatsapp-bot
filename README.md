@@ -18,37 +18,11 @@ A modular WhatsApp bot that connects to Ollama AI to respond to messages and can
 - Ollama running and accessible
 - A mobile device with WhatsApp installed
 
-## Setup
-
-1. Clone this repository
-2. Create a `.env` file based on the example below
-3. Install dependencies and start the bot:
-
-```bash
-npm install
-npm start
-```
-
-4. Access the QR code at `http://localhost:3000`
-5. Scan the QR code with WhatsApp on your mobile device
-
 ### Docker Setup
-
-Alternatively, you can use Docker:
 
 ```bash
 docker compose up -d
 ```
-
-### Scripts
-
-The following npm scripts are available:
-
-- `npm start` - Start the bot
-- `npm run dev` - Start with auto-reload (nodemon)
-- `npm run status` - Show command and dependency status
-- `npm run clean` - Clean the session directory
-- `npm run restart` - Restart the bot
 
 ## Usage
 
@@ -149,7 +123,7 @@ The bot supports customizable external IDs for webhooks. Use these environment v
 
 ## Adding New Commands
 
-The bot now uses a modular command system that makes it easy to add new functionality:
+The bot uses a modular command system that makes it easy to add new functionality:
 
 1. Create a new file in the `commands` directory (e.g., `myCommand.js`)
 2. Use the following template:
@@ -268,7 +242,3 @@ module.exports = {
 - **Permission issues**: If you encounter permission issues with the session directory, ensure Docker has the proper permissions to write to the volume.
 - **Connection issues**: Make sure Ollama is running and accessible from the Docker container.
 - **Scan errors**: If scanning the QR code doesn't work, try restarting the container and scanning a fresh QR code.
-
-## License
-
-ISC 
