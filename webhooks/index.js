@@ -38,7 +38,24 @@ function loadWebhooks() {
     }
   }
   
-  console.log(`Loaded ${webhookHandler.getWebhookIds().length} webhook handlers`);
+  try {
+    // Get webhook count using various methods, falling back as needed
+    let webhookCount = 0;
+    
+    if (typeof webhookHandler.getWebhookIds === 'function') {
+      webhookCount = webhookHandler.getWebhookIds().length;
+    } else if (typeof webhookHandler.getWebhookNames === 'function') {
+      webhookCount = webhookHandler.getWebhookNames().length;
+    } else if (webhookHandler.webhooks instanceof Map) {
+      webhookCount = webhookHandler.webhooks.size;
+    } else {
+      webhookCount = webhookModules.size;
+    }
+    
+    console.log(`Loaded ${webhookCount} webhook handlers`);
+  } catch (error) {
+    console.error('Error counting webhooks:', error);
+  }
 }
 
 // Store loaded webhook modules for reference

@@ -140,6 +140,7 @@ For commands:
 For webhooks: 
   __execute_webhook("webhook_name", {data})
   - The first parameter is the webhook internal name (e.g., "area_control", "send_notification")
+  - The AI should use the internal name, and the system will automatically map it to the correct external ID
   - The second parameter is a JSON object with the required data
 
 USAGE EXAMPLES:
@@ -297,6 +298,9 @@ async function handleChatbotMessage(msg, text) {
           data: functionCall.data,
           userMessage: text
         });
+        
+        // Log the webhook mapping for debugging
+        console.log(`Webhook mapping: internal name [${webhookInfo.name}] -> external ID [${webhookInfo.externalId}]`);
         
         // If we have a response to send before executing the webhook
         if (responseToUser) {

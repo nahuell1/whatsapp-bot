@@ -8,6 +8,14 @@ class WebhookHandler {
     this.webhooks = new Map(); // Map of internal names to webhook handlers and metadata
     this.webhooksByExternalId = new Map(); // Map of external IDs to internal names
   }
+  
+  /**
+   * Get all registered webhook internal names
+   * @returns {string[]} Array of webhook internal names
+   */
+  getWebhookIds() {
+    return Array.from(this.webhooks.keys());
+  }
 
   /**
    * Register a new webhook

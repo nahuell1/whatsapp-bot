@@ -2,6 +2,12 @@
  * Webhook utilities
  * Shared utility functions for webhook handlers
  */
+const { safeApiRequest } = require('../commands/utils');
+
+// Configuration from environment variables
+const CONFIG = {
+  HOMEASSISTANT_URL: process.env.HOMEASSISTANT_URL || 'http://localhost:8123'
+};
 
 // Store references to shared functionality
 const shared = {
@@ -57,8 +63,37 @@ async function logHomeAssistantActivity(activity) {
   }
 }
 
+/**
+ * Call a Home Assistant webhook using the external ID
+ * @param {string} externalId - The external webhook ID to use
+ * @param {object} data - Data to send to the webhook
+ * @returns {Promise<object>} - Response from Home Assistant
+ */
+async function callHomeAssistantWebhook(externalId, data) {
+  if (!externalId) {
+    throw new Error('No webhook ID provided');
+  }
+  
+  const webhookUrl = `${CONFIG.HOMEASSISTANT_URL}/api/webhook/${externalId}`;
+  console.log(`Calling Home Assistant webhook at: ${webhookUrl}`);
+  
+  try {
+    const response = await safeApiRequest(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    }, 10000); // 10 second timeout
+    
+    return response;
+  } catch (error) {
+    console.error('Error calling Home Assistant webhook:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   setNotifier,
   notifySubscribers,
-  logHomeAssistantActivity
+  logHomeAssistantActivity,
+  callHomeAssistantWebhook
 };

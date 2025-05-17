@@ -2,7 +2,9 @@
  * Area Control Webhook for Home Assistant
  * Controls areas via webhook with scene selection
  */
-const { notifySubscribers, logHomeAssistantActivity } = require('./webhookUtils');
+const { notifySubscribers, logHomeAssistantActivity, callHomeAssistantWebhook } = require('./webhookUtils');
+const webhookHandler = require('./webhookHandler');
+
 /**
  * Handle area control webhook
  * This webhook controls areas by turning on a scene with the format: scene.<area>_<state>
@@ -35,6 +37,29 @@ async function handleAreaControlWebhook(data) {
   // Construct scene name: scene.{area}_{on/off}
   const sceneName = `scene.${area}_${turn}`;
   console.log(`Area control - Activating scene: ${sceneName}`);
+  
+  // Get the webhook external ID
+  const webhookInfo = webhookHandler.findWebhook('area_control');
+  if (!webhookInfo) {
+    return {
+      success: false,
+      message: 'Area control webhook not found in registry'
+    };
+  }
+  
+  // Call Home Assistant webhook with the external ID
+  try {
+    await callHomeAssistantWebhook(webhookInfo.externalId, {
+      area: area,
+      turn: turn
+    });
+  } catch (error) {
+    console.error('Error calling Home Assistant webhook:', error);
+    return {
+      success: false,
+      message: `Failed to call Home Assistant: ${error.message}`
+    };
+  }
   
   // Notify subscribers of the home channel
   try {
