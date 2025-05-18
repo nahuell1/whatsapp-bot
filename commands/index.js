@@ -1,18 +1,32 @@
 /**
- * Commands index file
- * Registers all available commands
+ * @module commands/index
+ * @description Central registry for all available WhatsApp bot commands.
+ * 
+ * This module dynamically loads all command modules in the directory and
+ * registers them with the command handler. It also provides a method to
+ * set the WhatsApp client reference in commands that need direct access.
+ * 
+ * @requires fs
+ * @requires path
+ * @requires ./commandHandler
  */
+
 const fs = require('fs');
 const path = require('path');
 const commandHandler = require('./commandHandler');
 
-// Store loaded command modules for reference
+/**
+ * Store loaded command modules for reference and management
+ * @type {Map<string, Object>}
+ */
 const commandModules = new Map();
 
 /**
- * Dynamically load and register all command modules
+ * Dynamically load and register all command modules from this directory
+ * @throws {Error} If command loading fails
  */
 function loadCommands() {
+  // Get all command files, excluding utility and handler files
   const commandFiles = fs
     .readdirSync(__dirname)
     .filter(file => 
@@ -24,6 +38,7 @@ function loadCommands() {
 
   console.log('Loading commands:', commandFiles);
   
+  // Load each command module
   for (const file of commandFiles) {
     try {
       const command = require(path.join(__dirname, file));
@@ -45,10 +60,16 @@ function loadCommands() {
 }
 
 /**
- * Set the WhatsApp client reference in commands that need it
- * @param {object} client - WhatsApp client instance
+ * Set the WhatsApp client reference in commands that need direct client access
+ * @param {Object} client - WhatsApp client instance
+ * @throws {Error} If client is not a valid object
  */
 function setClientInCommands(client) {
+  if (!client || typeof client !== 'object') {
+    throw new Error('Invalid WhatsApp client provided to command modules');
+  }
+  
+  // Pass client to all commands that support it via setClient method
   for (const command of commandModules.values()) {
     if (typeof command.setClient === 'function') {
       command.setClient(client);
@@ -56,9 +77,14 @@ function setClientInCommands(client) {
   }
 }
 
-// Load all commands
+// Initialize by loading all commands during module import
 loadCommands();
 
-// Exportamos el manejador de comandos directamente y añadimos el método setClientInCommands
+// Add the setClientInCommands method to the command handler for external use
 commandHandler.setClientInCommands = setClientInCommands;
+
+/**
+ * Export the command handler with all registered commands
+ * @type {Object}
+ */
 module.exports = commandHandler;

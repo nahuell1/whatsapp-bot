@@ -1,27 +1,38 @@
 /**
  * Sensor Data Webhook for Home Assistant
- * Reports information from Home Assistant sensors to WhatsApp
+ * Reports information from Home Assistant sensors to WhatsApp users
+ * and channel subscribers
+ * 
+ * @module webhooks/sensorReportWebhook
  */
-const { notifySubscribers } = require('./webhookUtils');
+const { notifySubscribers, logHomeAssistantActivity } = require('./webhookUtils');
+const { validateRequiredParams, validateAllowedValues } = require('./validationUtils');
 
 // Store client reference for sending messages
 let whatsappClient = null;
 
+// Valid notification channels
+const VALID_CHANNELS = ['home', 'security', 'alerts', 'status', 'automation'];
+
 /**
  * Handle sensor report webhook
  * This webhook sends sensor data to specific WhatsApp numbers
+ * and optionally to channel subscribers
  * 
- * @param {object} data - Webhook data from Home Assistant
- * @param {string|object} data.sensor - The sensor data to report (or object with multiple sensors)
- * @param {string|string[]} data.to - The number(s) to send to (or "admin" for admin users)
- * @param {string} [data.title] - Optional title for the report
+ * @async
+ * @param {Object} data - Webhook data from Home Assistant
+ * @param {string|Object} data.sensor - The sensor data to report (or object with multiple sensors)
+ * @param {string|string[]} [data.to] - The number(s) to send to (or "admin" for admin users)
+ * @param {string} [data.title='Sensor Report'] - Optional title for the report
  * @param {boolean} [data.notify_subscribers=false] - Whether to notify channel subscribers
  * @param {string} [data.channel='home'] - The channel to notify subscribers on
- * @returns {object} - Result of the operation
+ * @returns {Object} - Result of the operation with success status and message
+ * @throws {Error} - On message sending error
  */
 async function handleSensorReportWebhook(data) {
   // Validate client
   if (!whatsappClient) {
+    console.error('Sensor report webhook error: WhatsApp client not initialized');
     return { 
       success: false, 
       message: 'WhatsApp client not initialized' 
@@ -37,20 +48,38 @@ async function handleSensorReportWebhook(data) {
     channel = 'home'
   } = data;
   
-  // Validate parameters
+  // Validate sensor data
   if (!sensor) {
+    console.error('Sensor report webhook validation error: Missing required parameter: sensor');
     return { 
       success: false, 
       message: 'Missing required parameter: sensor' 
     };
   }
   
+  // Validate recipients
   if (!to && !notify_subscribers) {
+    console.error('Sensor report webhook validation error: No recipients specified');
     return { 
       success: false, 
       message: 'Missing recipient: specify "to" or enable notify_subscribers' 
     };
   }
+  
+  // Validate channel if provided explicitly in the request
+  if (data.channel) {
+    const channelError = validateAllowedValues(channel, VALID_CHANNELS, 'channel');
+    if (channelError) {
+      console.error(`Sensor report webhook validation error: ${channelError}`);
+      return {
+        success: false,
+        message: channelError
+      };
+    }
+  }
+  
+  // Log activity for status check
+  await logHomeAssistantActivity(`sensor report request for ${typeof sensor === 'object' ? Object.keys(sensor).length : 1} sensor(s)`);
   
   // Format the sensor data into a readable message
   const sensorMessage = formatSensorData(sensor, title);
@@ -64,31 +93,13 @@ async function handleSensorReportWebhook(data) {
   // Send direct messages if 'to' is specified
   if (to) {
     // Determine direct message recipients
-    let recipients = [];
-    
-    if (to === 'admin') {
-      // Get admin numbers from environment variable
-      const adminNumbers = (process.env.ADMIN_NUMBERS || '')
-        .split(',')
-        .map(num => num.trim())
-        .filter(Boolean);
-        
-      if (adminNumbers.length === 0) {
-        console.warn('No admin numbers configured for sensor report webhook');
-      } else {
-        recipients = adminNumbers;
-      }
-    } else if (Array.isArray(to)) {
-      recipients = to;
-    } else {
-      recipients = [to];
-    }
+    let recipients = getRecipients(to);
     
     // Send direct messages
     for (const number of recipients) {
       try {
         // Format for WhatsApp (add @c.us suffix if needed)
-        const chatId = number.includes('@') ? number : `${number}@c.us`;
+        const chatId = formatWhatsAppId(number);
         
         // Send the message
         await whatsappClient.sendMessage(chatId, sensorMessage);
@@ -121,7 +132,8 @@ async function handleSensorReportWebhook(data) {
 
 /**
  * Format sensor data into a readable message
- * @param {object|string} sensor - Sensor data or simple value
+ * 
+ * @param {Object|string|number} sensor - Sensor data or simple value
  * @param {string} title - Title for the report
  * @returns {string} - Formatted message
  */
@@ -131,20 +143,16 @@ function formatSensorData(sensor, title) {
   if (typeof sensor === 'string' || typeof sensor === 'number') {
     // Simple scalar value
     message += `${sensor}`;
-  } else if (typeof sensor === 'object') {
+  } else if (typeof sensor === 'object' && sensor !== null) {
     // Complex object with multiple sensors or attributes
     Object.entries(sensor).forEach(([key, value]) => {
-      const formattedKey = key
-        .replace(/_/g, ' ')
-        .replace(/\b\w/g, c => c.toUpperCase());
+      const formattedKey = formatKeyName(key);
       
       if (typeof value === 'object' && value !== null) {
         // For nested objects, format specially
         message += `*${formattedKey}*:\n`;
         Object.entries(value).forEach(([subKey, subValue]) => {
-          const formattedSubKey = subKey
-            .replace(/_/g, ' ')
-            .replace(/\b\w/g, c => c.toUpperCase());
+          const formattedSubKey = formatKeyName(subKey);
           message += `  - ${formattedSubKey}: ${subValue}\n`;
         });
       } else {
@@ -159,19 +167,78 @@ function formatSensorData(sensor, title) {
   return message;
 }
 
-module.exports = {
-  register: (webhookHandler) => {
-    // External ID will be automatically read from SENSOR_REPORT_WEBHOOK_ID env var if available
-    const externalId = process.env.SENSOR_REPORT_WEBHOOK_ID || null;
-    webhookHandler.register(
-      'sensor_report', 
-      handleSensorReportWebhook, 
-      'Reports sensor data from Home Assistant to WhatsApp',
-      externalId
-    );
-  },
+/**
+ * Format a key name to be more readable
+ * 
+ * @param {string} key - The key to format
+ * @returns {string} - Formatted key
+ */
+function formatKeyName(key) {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/**
+ * Format a phone number for WhatsApp
+ * 
+ * @param {string} number - The phone number to format
+ * @returns {string} - WhatsApp chat ID
+ */
+function formatWhatsAppId(number) {
+  return number.includes('@') ? number : `${number}@c.us`;
+}
+
+/**
+ * Get recipients based on the 'to' parameter
+ * 
+ * @param {string|string[]} to - Recipient specification
+ * @returns {string[]} - Array of recipient numbers
+ */
+function getRecipients(to) {
+  if (to === 'admin') {
+    // Get admin numbers from environment variable
+    const adminNumbers = (process.env.ADMIN_NUMBERS || '')
+      .split(',')
+      .map(num => num.trim())
+      .filter(Boolean);
+      
+    if (adminNumbers.length === 0) {
+      console.warn('No admin numbers configured for sensor report webhook');
+      return [];
+    }
+    return adminNumbers;
+  } 
   
-  setClient: (client) => {
-    whatsappClient = client;
-  }
+  return Array.isArray(to) ? to : [to];
+}
+
+/**
+ * Register the sensor report webhook with webhook handler
+ * 
+ * @param {Object} webhookHandler - The webhook handler instance
+ */
+function register(webhookHandler) {
+  // External ID will be automatically read from SENSOR_REPORT_WEBHOOK_ID env var if available
+  const externalId = process.env.SENSOR_REPORT_WEBHOOK_ID || null;
+  webhookHandler.register(
+    'sensor_report', 
+    handleSensorReportWebhook, 
+    'Reports sensor data from Home Assistant to WhatsApp',
+    externalId
+  );
+}
+
+/**
+ * Set the WhatsApp client instance for sending messages
+ * 
+ * @param {Object} client - WhatsApp client instance
+ */
+function setClient(client) {
+  whatsappClient = client;
+}
+
+module.exports = {
+  register,
+  setClient
 };

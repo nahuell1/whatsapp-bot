@@ -1,13 +1,19 @@
 /**
- * Webhooks index file
- * Registers and loads all webhook handlers
+ * Webhooks Index Module
+ * Dynamically registers and manages all webhook handlers
+ * 
+ * @module webhooks/index
  */
 const fs = require('fs');
 const path = require('path');
 const webhookHandler = require('./webhookHandler');
 
+// Store loaded webhook modules for reference
+const webhookModules = new Map();
+
 /**
  * Dynamically load and register all webhook modules
+ * Scans the webhook directory for handler files and registers them
  */
 function loadWebhooks() {
   const webhookFiles = fs
@@ -15,11 +21,13 @@ function loadWebhooks() {
     .filter(file => 
       file !== 'webhookHandler.js' && 
       file !== 'index.js' &&
+      file !== 'webhookUtils.js' &&
+      file !== 'validationUtils.js' &&
       file.endsWith('.js') &&
       !file.startsWith('template')
     );
 
-  console.log('Loading webhook handlers:', webhookFiles);
+  console.log(`Found ${webhookFiles.length} webhook handler files to load`);
   
   for (const file of webhookFiles) {
     try {
@@ -30,6 +38,7 @@ function loadWebhooks() {
         webhook.register(webhookHandler);
         // Store reference to the webhook module
         webhookModules.set(file, webhook);
+        console.log(`Successfully registered webhook from ${file}`);
       } else {
         console.warn(`Webhook file ${file} does not export a register function`);
       }
@@ -39,36 +48,37 @@ function loadWebhooks() {
   }
   
   try {
-    // Get webhook count using various methods, falling back as needed
-    let webhookCount = 0;
-    
-    if (typeof webhookHandler.getWebhookIds === 'function') {
-      webhookCount = webhookHandler.getWebhookIds().length;
-    } else if (typeof webhookHandler.getWebhookNames === 'function') {
-      webhookCount = webhookHandler.getWebhookNames().length;
-    } else if (webhookHandler.webhooks instanceof Map) {
-      webhookCount = webhookHandler.webhooks.size;
-    } else {
-      webhookCount = webhookModules.size;
-    }
+    // Get webhook count
+    const webhookCount = webhookHandler.getWebhookIds().length;
+    const webhookInfo = webhookHandler.getWebhooksInfo();
     
     console.log(`Loaded ${webhookCount} webhook handlers`);
+    console.log('Available webhooks:');
+    webhookInfo.forEach(webhook => {
+      console.log(`- ${webhook.name} (${webhook.externalId}): ${webhook.description}`);
+    });
   } catch (error) {
-    console.error('Error counting webhooks:', error);
+    console.error('Error processing webhooks:', error);
   }
 }
 
-// Store loaded webhook modules for reference
-const webhookModules = new Map();
-
 /**
  * Set the WhatsApp client reference in webhooks that need it
- * @param {object} client - WhatsApp client instance
+ * 
+ * @param {Object} client - WhatsApp client instance
  */
 function setClientInWebhooks(client) {
-  for (const webhook of webhookModules.values()) {
+  if (!client) {
+    console.warn('Attempting to set null or undefined client in webhooks');
+    return;
+  }
+
+  console.log('Setting WhatsApp client in webhook modules');
+  
+  for (const [fileName, webhook] of webhookModules.entries()) {
     if (typeof webhook.setClient === 'function') {
       webhook.setClient(client);
+      console.log(`Set client in webhook module: ${fileName}`);
     }
   }
 }

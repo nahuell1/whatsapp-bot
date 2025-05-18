@@ -1,11 +1,22 @@
 /**
- * System Status Command for WhatsApp Bot
- * Shows status information about the bot and connected systems
+ * @module commands/statusCommand
+ * @description System Status Command for WhatsApp Bot
+ * 
+ * This module provides the !status command that shows information about
+ * the bot's system status, connected services, and configuration.
+ * It checks the availability of AI models and Home Assistant.
+ * 
+ * @requires os
+ * @requires node-fetch
  */
 const os = require('os');
 const fetch = require('node-fetch');
 
-// Store reference to the WhatsApp client
+/**
+ * Store reference to the WhatsApp client
+ * @type {Object|null}
+ * @private
+ */
 let whatsappClient = null;
 
 // Configuration from environment variables with multi-model support
@@ -36,15 +47,22 @@ const CONFIG = {
 
 /**
  * Format uptime in a human-readable way
+ * 
  * @param {number} uptime - Uptime in seconds
- * @returns {string} - Formatted uptime string
+ * @returns {string} - Formatted uptime string (e.g. "2d 5h 30m 10s")
  */
 function formatUptime(uptime) {
+  if (!uptime && uptime !== 0) {
+    return 'unknown';
+  }
+  
+  // Calculate time components
   const days = Math.floor(uptime / 86400);
   const hours = Math.floor((uptime % 86400) / 3600);
   const minutes = Math.floor((uptime % 3600) / 60);
   const seconds = Math.floor(uptime % 60);
   
+  // Build parts array (only include non-zero components)
   const parts = [];
   if (days > 0) parts.push(`${days}d`);
   if (hours > 0) parts.push(`${hours}h`);

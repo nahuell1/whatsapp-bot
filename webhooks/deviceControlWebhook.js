@@ -1,20 +1,23 @@
 /**
  * Device Control Webhook for Home Assistant
  * Controls individual devices via webhook with service selection
+ *
+ * @module webhooks/deviceControlWebhook
  */
-const { notifySubscribers } = require('./webhookUtils');
+const { notifySubscribers, logHomeAssistantActivity } = require('./webhookUtils');
 
 /**
  * Handle device control webhook
  * This webhook controls individual devices using domain/service calls
  * 
- * @param {object} data - Webhook data from Home Assistant
+ * @async
+ * @param {Object} data - Webhook data from Home Assistant
  * @param {string} data.entity_id - The entity ID to control (e.g., light.kitchen, switch.tv)
  * @param {string} data.domain - The domain of the entity (e.g., light, switch, media_player)
  * @param {string} data.service - The service to call (e.g., turn_on, turn_off, toggle)
- * @param {object} [data.service_data] - Optional service data parameters
+ * @param {Object} [data.service_data] - Optional service data parameters
  * @param {boolean} [data.notify=true] - Whether to send notification to subscribers
- * @returns {object} - Result of the operation
+ * @returns {Object} - Result of the operation
  */
 async function handleDeviceControlWebhook(data) {
   // Extract parameters with defaults
@@ -28,6 +31,7 @@ async function handleDeviceControlWebhook(data) {
   
   // Validate required parameters
   if (!entity_id) {
+    console.log('Missing required parameter: entity_id');
     return { 
       success: false, 
       message: 'Missing required parameter: entity_id' 
@@ -35,6 +39,7 @@ async function handleDeviceControlWebhook(data) {
   }
   
   if (!domain) {
+    console.log('Missing required parameter: domain');
     return { 
       success: false, 
       message: 'Missing required parameter: domain' 
@@ -42,6 +47,7 @@ async function handleDeviceControlWebhook(data) {
   }
   
   if (!service) {
+    console.log('Missing required parameter: service');
     return { 
       success: false, 
       message: 'Missing required parameter: service' 
@@ -81,6 +87,9 @@ async function handleDeviceControlWebhook(data) {
     }
   }
   
+  // Log activity for status check
+  await logHomeAssistantActivity(`device control: ${domain}.${service} for ${entity_id}`);
+  
   return { 
     success: true,
     service_call: serviceCall,
@@ -109,10 +118,15 @@ function determineEmoji(domain, service) {
       emoji = service.includes('on') ? '⚡' : '🔌';
       break;
     case 'media_player':
-      if (service.includes('play')) emoji = '▶️';
-      else if (service.includes('pause')) emoji = '⏸️';
-      else if (service.includes('stop')) emoji = '⏹️';
-      else emoji = '🎵';
+      if (service.includes('play')) {
+        emoji = '▶️';
+      } else if (service.includes('pause')) {
+        emoji = '⏸️';
+      } else if (service.includes('stop')) {
+        emoji = '⏹️';
+      } else {
+        emoji = '🎵';
+      }
       break;
     case 'climate':
       emoji = '❄️';
@@ -121,24 +135,36 @@ function determineEmoji(domain, service) {
       emoji = service.includes('unlock') ? '🔓' : '🔒';
       break;
     case 'cover':
-      if (service.includes('open')) emoji = '📂';
-      else if (service.includes('close')) emoji = '📁';
-      else emoji = '🪟';
+      if (service.includes('open')) {
+        emoji = '📂';
+      } else if (service.includes('close')) {
+        emoji = '📁';
+      } else {
+        emoji = '🪟';
+      }
       break;
   }
   
   return emoji;
 }
 
+/**
+ * Register this webhook with the webhook handler
+ * 
+ * @param {Object} webhookHandler - The webhook handler instance
+ */
+function register(webhookHandler) {
+  // External ID will be automatically read from DEVICE_CONTROL_WEBHOOK_ID env var if available
+  const externalId = process.env.DEVICE_CONTROL_WEBHOOK_ID || null;
+  
+  webhookHandler.register(
+    'device_control', 
+    handleDeviceControlWebhook, 
+    'Controls individual Home Assistant devices using domain and service calls',
+    externalId
+  );
+}
+
 module.exports = {
-  register: (webhookHandler) => {
-    // External ID will be automatically read from DEVICE_CONTROL_WEBHOOK_ID env var if available
-    const externalId = process.env.DEVICE_CONTROL_WEBHOOK_ID || null;
-    webhookHandler.register(
-      'device_control', 
-      handleDeviceControlWebhook, 
-      'Controls individual Home Assistant devices using domain and service calls',
-      externalId
-    );
-  }
+  register
 };

@@ -1,6 +1,6 @@
 /**
- * Chatbot Command for WhatsApp Bot
- * Handles natural language processing and function calls
+ * @module commands/chatbotCommand
+ * @description Intelligent chatbot with natural language processing and function call capabilities
  * 
  * This module implements an intelligent chatbot that can:
  * 1. Process natural language messages that don't begin with a command prefix (!)
@@ -17,8 +17,10 @@
  * - For commands: __execute_command("!command", "arguments")
  * - For webhooks: __execute_webhook("webhook_id", {"param": "value"})
  * 
- * Configuration:
- * - Set ENABLE_FUNCTION_CALLS=false in .env to disable automatic command execution
+ * @requires ./utils
+ * @requires ./commandHandler
+ * @requires ../webhooks/webhookHandler
+ * @requires ./parameterExtraction
  */
 const { safeApiRequest } = require('./utils');
 
@@ -27,7 +29,10 @@ const commandHandler = require('./commandHandler');
 const webhookHandler = require('../webhooks/webhookHandler');
 const parameterExtraction = require('./parameterExtraction');
 
-// Conditionally import OpenAI
+/**
+ * OpenAI client - conditionally imported
+ * @type {Object|null}
+ */
 let OpenAI;
 try {
   OpenAI = require('openai');
@@ -35,7 +40,13 @@ try {
   console.warn('OpenAI package not available:', error.message);
 }
 
-// Configuration with support for multiple models for different purposes
+/**
+ * Configuration settings for AI providers and models
+ * Supports multiple models for different purposes with fallback chains
+ * 
+ * @type {Object}
+ * @constant
+ */
 const CONFIG = {
   // API URLs and Authentication
   OLLAMA_API_URL: process.env.OLLAMA_API_URL || 'http://localhost:11434',
@@ -59,39 +70,60 @@ const CONFIG = {
   FUNCTION_AI_MODEL: process.env.FUNCTION_AI_MODEL || process.env.DEFAULT_AI_MODEL || 'mi-bot',
 };
 
-// Function to check if function calls are enabled
+/**
+ * Checks if function calls are enabled via settings or environment variables
+ * 
+ * @returns {boolean} True if function calls are enabled, false otherwise
+ */
 function areFunctionCallsEnabled() {
   try {
     // First try to get the setting from the settings module
     const settingsCommand = require('./settingsCommand');
     if (settingsCommand && settingsCommand.getSettings) {
-      return settingsCommand.getSettings().enableFunctionCalls;
+      const settings = settingsCommand.getSettings();
+      return settings && settings.enableFunctionCalls === true;
     }
   } catch (error) {
     // Ignore errors, fall back to environment variable
+    console.debug('Error retrieving function call settings:', error.message);
   }
   
-  // Fall back to environment variable
+  // Fall back to environment variable (default to enabled unless explicitly disabled)
   return process.env.ENABLE_FUNCTION_CALLS !== 'false';
 }
 
-// Store client reference for executing functions
+/**
+ * WhatsApp client reference for executing functions
+ * @type {Object|null}
+ */
 let whatsappClient = null;
 
 /**
  * Get list of available webhook names from the webhook handler
- * @returns {string[]} - Array of internal webhook names
+ * 
+ * @returns {string[]} Array of internal webhook names
  */
 function getAvailableWebhookNames() {
-  return webhookHandler.getWebhooksInfo().map(webhook => webhook.name);
+  try {
+    return webhookHandler.getWebhooksInfo().map(webhook => webhook.name);
+  } catch (error) {
+    console.error('Error retrieving webhook names:', error);
+    return [];
+  }
 }
 
 /**
  * Get webhook parameter schema for OpenAI function definition
+ * 
  * @param {string} webhookName - Name of the webhook
- * @returns {object} - Schema for function parameters
+ * @returns {object} Schema for function parameters
+ * @throws {Error} If webhook parameters cannot be retrieved
  */
 function getWebhookParametersSchema(webhookName) {
+  if (!webhookName) {
+    throw new Error('Webhook name is required to get parameter schema');
+  }
+  
   // Get parameter info for this webhook
   const paramInfo = parameterExtraction.getWebhookParameterInfo(webhookName);
   const paramDefs = parameterExtraction.getParameterDefinitions(webhookName);
@@ -108,7 +140,7 @@ function getWebhookParametersSchema(webhookName) {
       };
       
       // Add enum if we have valid values
-      if (paramDef.validValues && paramDef.validValues.length > 0) {
+      if (paramDef.validValues && Array.isArray(paramDef.validValues) && paramDef.validValues.length > 0) {
         properties[paramName].enum = paramDef.validValues;
       }
     }
@@ -118,7 +150,7 @@ function getWebhookParametersSchema(webhookName) {
     type: "object",
     description: `Data for ${webhookName} webhook`,
     properties: properties,
-    required: paramInfo.required || []
+    required: Array.isArray(paramInfo.required) ? paramInfo.required : []
   };
   
   return schema;
@@ -126,42 +158,59 @@ function getWebhookParametersSchema(webhookName) {
 
 /**
  * Generate OpenAI function definitions for all webhooks
- * @returns {Array} - Array of function definitions
+ * 
+ * @returns {Array<Object>} Array of function definitions compatible with OpenAI API
+ * @throws {Error} If webhook definitions cannot be generated
  */
 function generateWebhookFunctionDefinitions() {
-  // Get all webhook names
-  const webhookNames = getAvailableWebhookNames();
-  
-  // Create a function definition for each webhook
-  return webhookNames.map(webhookName => {
-    const webhookInfo = webhookHandler.findWebhook(webhookName);
-    if (!webhookInfo) return null;
+  try {
+    // Get all webhook names
+    const webhookNames = getAvailableWebhookNames();
     
-    return {
-      name: "execute_webhook",
-      description: `Execute the ${webhookName} webhook to control Home Assistant`,
-      parameters: {
-        type: "object",
-        properties: {
-          webhook: {
-            type: "string",
-            description: "The webhook name to execute (internal name)",
-            enum: [webhookName]
+    // Create a function definition for each webhook
+    return webhookNames.map(webhookName => {
+      const webhookInfo = webhookHandler.findWebhook(webhookName);
+      if (!webhookInfo) return null;
+      
+      const description = webhookInfo.description || `Execute the ${webhookName} webhook to control Home Assistant`;
+      
+      return {
+        name: "execute_webhook",
+        description: description,
+        parameters: {
+          type: "object",
+          properties: {
+            webhook: {
+              type: "string",
+              description: "The webhook name to execute (internal name)",
+              enum: [webhookName]
+            },
+            data: getWebhookParametersSchema(webhookName)
           },
-          data: getWebhookParametersSchema(webhookName)
+          required: ["webhook", "data"],
         },
-        required: ["webhook", "data"],
-      },
-    };
-  }).filter(Boolean); // Filter out any null entries
+      };
+    }).filter(Boolean); // Filter out any null entries
+  } catch (error) {
+    console.error('Error generating webhook function definitions:', error);
+    return [];
+  }
 }
 
 /**
  * Extract command and args from a potential function call in AI response
- * @param {string} functionCall - The function call text
- * @returns {object|null} - Command info or null if not a valid function call
+ * 
+ * @param {string} functionCall - The function call text to parse
+ * @returns {object|null} Command info object or null if not a valid function call
+ * @property {string} type - Type of call ('command' or 'webhook')
+ * @property {string} command - Command name or webhook name
+ * @property {string|object} args - Arguments for the command or webhook
  */
 function parseFunctionCall(functionCall) {
+  if (!functionCall || typeof functionCall !== 'string') {
+    return null;
+  }
+  
   try {
     return parseFunctionCallText(functionCall);
   } catch (error) {
@@ -172,10 +221,23 @@ function parseFunctionCall(functionCall) {
 
 /**
  * Extract parameter specifications from command files
+ * 
+ * Uses multiple strategies to find parameter documentation in command files:
+ * 1. JSDoc annotations for the args parameter
+ * 2. Command registration help text
+ * 3. Variable declarations and comments in handler functions
+ * 4. Parameter validation checks
+ * 5. Special case handling for known commands
+ * 
  * @param {string} commandName - Name of the command (e.g., "!clima")
- * @returns {string} - Parameter specifications or empty string if not found
+ * @returns {string} Parameter specifications or empty string if not found
+ * @throws {Error} Silently caught if file access or parsing fails
  */
 function extractCommandParameters(commandName) {
+  if (!commandName) {
+    return '';
+  }
+  
   try {
     const fs = require('fs');
     const path = require('path');
@@ -186,6 +248,7 @@ function extractCommandParameters(commandName) {
     
     // Check if the file exists
     if (!fs.existsSync(filePath)) {
+      console.debug(`Command file not found for ${commandName}: ${filePath}`);
       return '';
     }
     
@@ -261,10 +324,22 @@ function extractCommandParameters(commandName) {
 
 /**
  * Extract parameter specifications from webhook files
+ * 
+ * Uses multiple strategies to find parameter documentation in webhook files:
+ * 1. JSDoc annotations for data parameters
+ * 2. Parameter definitions in validation functions
+ * 3. Exported parameter schemas
+ * 4. Special case handling for known webhooks
+ * 
  * @param {string} webhookName - Name of the webhook
- * @returns {string} - Parameter specifications or empty string if not found
+ * @returns {string} Parameter specifications or empty string if not found
+ * @throws {Error} Silently caught if file access or parsing fails
  */
 function extractWebhookParameters(webhookName) {
+  if (!webhookName) {
+    return '';
+  }
+  
   try {
     const fs = require('fs');
     const path = require('path');
@@ -273,6 +348,7 @@ function extractWebhookParameters(webhookName) {
     
     // Check if the file exists
     if (!fs.existsSync(filePath)) {
+      console.debug(`Webhook file not found for ${webhookName}: ${filePath}`);
       return '';
     }
     
@@ -280,7 +356,7 @@ function extractWebhookParameters(webhookName) {
     const fileContent = fs.readFileSync(filePath, 'utf8');
     
     // Strategy 1: Try to extract from JSDoc comments for the handler function
-    // Fix the regex to correctly match JSDoc format for params
+    // Matches @param annotations for data properties in JSDoc blocks
     const jsdocRegex = /\/\*\*[\s\S]*?handle\w+Webhook[\s\S]*?@param\s+{object}\s+data[\s\S]*?@param\s+{([^}]+)}\s+data\.([^\s-]+)[\s\S]*?-[\s\S]*?(.*?)[\s\S]*?(?:\*\/|\n\s*\*\s*@)/g;
     
     let params = [];
@@ -320,6 +396,7 @@ function extractWebhookParameters(webhookName) {
     }
     
     // Strategy 3: Try to find parameter destructuring in the handler function
+    // This helps identify required parameters even without documentation
     const destructuringRegex = /const\s+{([^}]+)}\s*=\s*data/;
     const destructuringMatch = fileContent.match(destructuringRegex);
     
@@ -338,10 +415,15 @@ function extractWebhookParameters(webhookName) {
     }
     
     // Strategy 4: Try to find parameter validation checks
+    // Looks for validation statements like if(!paramName) { ... missing/required... }
     const validationRegex = /if\s*\(!([a-zA-Z0-9_]+)\)\s*{[\s\S]*?(?:missing|required|invalid).*?(?:parameter|field)/gi;
     let validationParams = [];
-    while ((match = validationRegex.exec(fileContent)) !== null) {
-      validationParams.push(`${match[1]} (required)`);
+    let validationMatch;
+    
+    while ((validationMatch = validationRegex.exec(fileContent)) !== null) {
+      if (validationMatch && validationMatch[1]) {
+        validationParams.push(`${validationMatch[1]} (required)`);
+      }
     }
     
     if (validationParams.length > 0) {
@@ -349,15 +431,17 @@ function extractWebhookParameters(webhookName) {
     }
     
     // Strategy 5: Check for valid values in validation logic
+    // Looks for validation like if(!values.includes('value')) { ... not valid ... }
     const validValuesRegex = /if\s*\(!([a-zA-Z0-9_]+\.includes\(['"]([^'"]+)['"]\))[\s\S]*?([a-zA-Z0-9_]+).*?not valid/i;
     const validValuesMatch = fileContent.match(validValuesRegex);
     
-    if (validValuesMatch) {
+    if (validValuesMatch && validValuesMatch.length >= 4) {
       const validValuesList = validValuesMatch[2].split(',').map(v => v.trim());
       return `Required parameters for ${webhookName}:\n- ${validValuesMatch[3]} (required, valid values: ${validValuesList.join(', ')})`;
     }
     
     // Strategy 6: Hardcoded known webhook parameters for better documentation
+    // Provides detailed parameter information for commonly used webhooks
     if (webhookName === 'areaControl') {
       return `Required parameters for ${webhookName}:
 - area (string): The area to control (valid values: office, room)
@@ -388,8 +472,14 @@ function extractWebhookParameters(webhookName) {
 }
 
 /**
- * Generate an Ollama system prompt with available commands and webhooks
- * @returns {string} - System prompt with available commands and webhooks
+ * Generate a system prompt with available commands and webhooks information
+ * 
+ * This creates a comprehensive prompt that includes:
+ * 1. All available commands with their help text and parameter specifications
+ * 2. All available webhooks with their descriptions and parameter requirements
+ * 3. Instructions for the AI model on how to format function calls
+ * 
+ * @returns {string} System prompt with available commands and webhooks
  */
 function generateSystemPrompt() {
   // For filesystem operations
@@ -399,6 +489,7 @@ function generateSystemPrompt() {
   // Get all available commands with their help text
   const availableCommands = Array.from(commandHandler.commands.keys())
     .map(cmd => {
+      // Find help message for this command
       const helpIndex = commandHandler.helpMessages.findIndex(help => help.startsWith(cmd));
       const helpText = helpIndex >= 0 ? commandHandler.helpMessages[helpIndex] : cmd;
       
@@ -410,12 +501,15 @@ function generateSystemPrompt() {
   // Get all available webhooks with their descriptions and parameter requirements
   const availableWebhooks = webhookHandler.getWebhooksInfo()
     .map(webhook => {
-      const basicInfo = `${webhook.name}: ${webhook.description}`;
+      if (!webhook || !webhook.name) return null;
+      
+      const basicInfo = `${webhook.name}: ${webhook.description || 'No description available'}`;
       
       // Extract parameter specifications
       const paramSpecs = extractWebhookParameters(webhook.name);
       return paramSpecs ? `${basicInfo}\n${paramSpecs}` : basicInfo;
-    });
+    })
+    .filter(Boolean); // Remove any null entries
 
   // Build specific webhook parameter information
   const webhookParamInfo = [];
@@ -527,9 +621,12 @@ For each webhook, use EXACTLY the parameter names and structure specified in the
 }
 
 /**
- * Log function calls made by the chatbot
- * @param {string} type - Type of function call (command or webhook)
+ * Log function calls made by the chatbot to a file for auditing and debugging
+ * 
+ * @param {string} type - Type of function call ('command' or 'webhook')
  * @param {object} data - Data about the function call
+ * @returns {Promise<void>} A promise that resolves when logging is complete
+ * @throws {Error} If logging fails (caught internally)
  */
 async function logFunctionCall(type, data) {
   try {
@@ -541,6 +638,7 @@ async function logFunctionCall(type, data) {
     try {
       await fs.mkdir(path.join(__dirname, '../logs'), { recursive: true });
     } catch (err) {
+      // Ignore if directory already exists
       if (err.code !== 'EEXIST') {
         console.error('Error creating logs directory:', err);
       }
@@ -549,8 +647,8 @@ async function logFunctionCall(type, data) {
     // Format log entry as JSON
     const logEntry = {
       timestamp: new Date().toISOString(),
-      type,
-      data,
+      type: type || 'unknown',
+      data: data || {},
     };
     
     // Append to log file
@@ -853,10 +951,25 @@ Examples:
 
 /**
  * Handle chatbot messages and process potential function calls
- * @param {object} msg - WhatsApp message object
+ * 
+ * This is the main entry point for the chatbot, processing user messages that don't
+ * start with command prefixes. It follows a three-step process:
+ * 1. Detect user intent (chat, command, webhook)
+ * 2. Generate appropriate response based on intent
+ * 3. Execute any function calls detected in the response
+ * 
+ * @param {Object} msg - WhatsApp message object
+ * @param {Function} msg.reply - Function to reply to the message
  * @param {string} text - User's message text
+ * @returns {Promise<void>} A promise that resolves when message processing is complete
+ * @throws {Error} If there's an issue with message processing
  */
 async function handleChatbotMessage(msg, text) {
+  if (!text || typeof text !== 'string') {
+    console.warn('Invalid message text received by chatbot handler');
+    return;
+  }
+  
   console.log('Processing chatbot message:', text);
   
   try {
@@ -1213,9 +1326,26 @@ Avoid suggesting actions that would require executing commands or webhooks.`;
   }
 }
 
+/**
+ * Module exports
+ * @type {Object}
+ */
 module.exports = {
+  /**
+   * Main chatbot message handler function
+   */
   handleChatbotMessage,
+  
+  /**
+   * Sets the WhatsApp client reference for direct client access
+   * 
+   * @param {Object} client - WhatsApp client instance
+   */
   setClient: (client) => {
+    if (!client || typeof client !== 'object') {
+      console.warn('Invalid WhatsApp client provided to chatbot module');
+      return;
+    }
     whatsappClient = client;
   }
 };

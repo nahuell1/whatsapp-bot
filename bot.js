@@ -1,4 +1,9 @@
-// WhatsApp Bot with Ollama AI integration
+/**
+ * WhatsApp Bot Main Module
+ * Integrates WhatsApp with AI providers and Home Assistant
+ * 
+ * @module bot
+ */
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
@@ -8,7 +13,10 @@ const fetch = require('node-fetch');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 
-// Environment variables with defaults
+/**
+ * Configuration from environment variables with sensible defaults
+ * @constant {Object}
+ */
 const CONFIG = {
   // API Connection Settings
   OLLAMA_API_URL: process.env.OLLAMA_API_URL || 'http://localhost:11434',
@@ -40,7 +48,10 @@ const CONFIG = {
   REQUIRE_WEBHOOK_AUTH: process.env.REQUIRE_WEBHOOK_AUTH === 'true'
 };
 
-// Initialize WhatsApp client
+/**
+ * Initialize WhatsApp client with authentication and browser settings
+ * @constant {Client}
+ */
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: CONFIG.SESSION_DIR }),
   puppeteer: {
@@ -56,44 +67,102 @@ const client = new Client({
   }
 });
 
-// Track the last QR code for web display
+/**
+ * Track the last QR code for web display
+ * @type {string|null}
+ */
 let lastQR = null;
 
-// Event handlers
+/**
+ * WhatsApp client event handlers
+ * Handle authentication, QR code generation, and connection states
+ */
+
+/**
+ * QR code event handler
+ * Generates terminal QR code and stores it for web display
+ */
 client.on('qr', qr => {
   console.log('New QR code generated, available at /qr.png');
   lastQR = qr;
   qrcodeTerminal.generate(qr, { small: true });
 });
 
+/**
+ * Authentication success event handler
+ * Clears QR code when no longer needed
+ */
 client.on('authenticated', () => {
   console.log('✅ Authentication successful');
   lastQR = null;
 });
 
+/**
+ * Authentication failure event handler
+ * Provides troubleshooting guidance
+ */
 client.on('auth_failure', msg => {
   console.error('❌ Authentication failure:', msg);
   console.log('Try removing the session/ directory and restart the bot');
 });
 
+/**
+ * Ready event handler
+ * Sets up connections between modules when client is ready
+ */
 client.on('ready', () => {
   console.log('✅ WhatsApp client connected and ready');
-  // Pass client reference to commands that need it
-  commands.setClientInCommands(client);
   
-  // Pass client reference to webhooks that need it
+  // Initialize subsystems
+  initializeCommands();
+  initializeWebhooks();
+  initializeChatbot();
+  initializeNotificationSystem();
+});
+
+/**
+ * Initialize command system with client reference
+ */
+function initializeCommands() {
+  if (typeof commands.setClientInCommands === 'function') {
+    commands.setClientInCommands(client);
+    console.log('✅ Command system initialized');
+  } else {
+    console.warn('⚠️ Command system could not be initialized: missing setClientInCommands method');
+  }
+}
+
+/**
+ * Initialize webhook system with client reference
+ */
+function initializeWebhooks() {
   if (typeof webhooks.setClientInWebhooks === 'function') {
     webhooks.setClientInWebhooks(client);
+    console.log('✅ Webhook system initialized');
+  } else {
+    console.warn('⚠️ Webhook system could not be initialized: missing setClientInWebhooks method');
   }
-  
-  // Pass client reference to the chatbot handler
-  const chatbotHandler = require('./commands/chatbotCommand');
-  if (typeof chatbotHandler.setClient === 'function') {
-    chatbotHandler.setClient(client);
-    console.log('✅ Chatbot handler initialized');
+}
+
+/**
+ * Initialize chatbot handler with client reference
+ */
+function initializeChatbot() {
+  try {
+    const chatbotHandler = require('./commands/chatbotCommand');
+    if (typeof chatbotHandler.setClient === 'function') {
+      chatbotHandler.setClient(client);
+      console.log('✅ Chatbot handler initialized');
+    }
+  } catch (error) {
+    console.error('⚠️ Chatbot system could not be initialized:', error.message);
   }
-  
-  // Connect the subscription notification system to webhooks
+}
+
+/**
+ * Initialize notification system and connect it to webhooks
+ */
+function initializeNotificationSystem() {
   try {
     // Import direct reference to notifySubscribers from subscribeCommand
     const { notifySubscribers } = require('./commands/subscribeCommand');
@@ -104,58 +173,87 @@ client.on('ready', () => {
       console.log('✅ Notification system connected to webhooks');
     }
   } catch (error) {
-    console.error('Error connecting notification system:', error);
+    console.error('⚠️ Error connecting notification system:', error.message);
   }
-});
+}
 
+/**
+ * Loading screen event handler
+ * Provides loading progress updates
+ */
 client.on('loading_screen', (percent, message) => {
   console.log(`Loading: ${percent}% - ${message}`);
 });
 
+/**
+ * Disconnection event handler
+ * Cleans up state and logs disconnect reason
+ */
 client.on('disconnected', reason => {
   console.warn('❌ Disconnected:', reason);
   lastQR = null;
 });
 
-// Load command and webhook handlers
+// Load module dependencies
 const commands = require('./commands');
 const webhooks = require('./webhooks');
 
-// Import webhook utilities
+/**
+ * Import required module dependencies
+ */
 const webhookUtils = require('./webhooks/webhookUtils');
-
-// Import chatbot handler for non-command messages
 const chatbotHandler = require('./commands/chatbotCommand');
 
-// Handle incoming messages
+/**
+ * Message event handler
+ * Processes incoming WhatsApp messages and routes them to appropriate handlers
+ * 
+ * @async
+ * @param {Object} msg - The WhatsApp message object
+ */
 client.on('message', async msg => {
   console.log('Message received:', msg.body);
   
-  // Let the command handler process the message
-  // It will return true if a command was handled
-  const wasHandled = await commands.handleMessage(msg);
-  
-  if (!wasHandled) {
-    // If the message starts with the command prefix but wasn't handled
-    if (msg.body.startsWith(CONFIG.COMMAND_PREFIX)) {
-      console.log('No command matched, but message has command prefix');
-      msg.reply('Comando no reconocido. Envía !help para ver los comandos disponibles.');
-    } 
-    // If message doesn't start with a command prefix, handle as chatbot
-    else if (!msg.body.startsWith('!')) {
-      // Pass to chatbot handler
-      await chatbotHandler.handleChatbotMessage(msg, msg.body);
+  try {
+    // Let the command handler process the message
+    // It will return true if a command was handled
+    const wasHandled = await commands.handleMessage(msg);
+    
+    if (!wasHandled) {
+      // If the message starts with the command prefix but wasn't handled
+      if (msg.body.startsWith(CONFIG.COMMAND_PREFIX)) {
+        console.log('No command matched, but message has command prefix');
+        msg.reply('Comando no reconocido. Envía !help para ver los comandos disponibles.');
+      } 
+      // If message doesn't start with a command prefix, handle as chatbot
+      else if (!msg.body.startsWith('!')) {
+        // Pass to chatbot handler
+        await chatbotHandler.handleChatbotMessage(msg, msg.body);
+      }
+    }
+  } catch (error) {
+    console.error('Error processing message:', error);
+    // Only reply with error if in development mode
+    if (process.env.NODE_ENV === 'development') {
+      msg.reply('❌ Error processing message: ' + error.message);
     }
   }
 });
 
-// Initialize the WhatsApp client
+/**
+ * Initialize the WhatsApp client
+ * This starts the connection process and will trigger QR code generation
+ */
 console.log('Starting WhatsApp client...');
 client.initialize().catch(error => {
   console.error('Error initializing client:', error);
 });
 
-// Setup web server for QR code display
+/**
+ * Setup web server for QR code display
+ * Provides a web interface to scan the QR code
+ * @type {Express.Application}
+ */
 const app = express();
 
 app.get('/', (_, res) => {
@@ -201,6 +299,12 @@ app.get('/status', (_, res) => {
   }
 });
 
+/**
+ * QR code image endpoint
+ * Serves the generated QR code as a PNG image
+ * 
+ * @async
+ */
 app.get('/qr.png', async (_, res) => {
   if (!lastQR) return res.status(503).send('QR code not yet generated.');
   try {
@@ -211,7 +315,15 @@ app.get('/qr.png', async (_, res) => {
   }
 });
 
-// Middleware to verify API key for webhooks
+/**
+ * Middleware to verify API key for webhooks
+ * Provides authentication for webhook endpoints
+ * 
+ * @param {Express.Request} req - Express request object
+ * @param {Express.Response} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {void}
+ */
 const verifyWebhookApiKey = (req, res, next) => {
   if (!CONFIG.REQUIRE_WEBHOOK_AUTH) {
     return next(); // Skip authentication if not required
@@ -235,7 +347,12 @@ const verifyWebhookApiKey = (req, res, next) => {
   next();
 };
 
-// Webhook endpoint for Home Assistant integration
+/**
+ * Webhook endpoint for Home Assistant integration
+ * Processes incoming webhook requests from Home Assistant
+ * 
+ * @async
+ */
 app.post('/webhook/:id', express.json(), verifyWebhookApiKey, async (req, res) => {
   const webhookId = req.params.id;
   const data = req.body;
@@ -245,12 +362,20 @@ app.post('/webhook/:id', express.json(), verifyWebhookApiKey, async (req, res) =
   try {
     const result = await webhooks.handleWebhook(webhookId, data);
     
-    if (result.error) {
-      console.error(`Webhook error (${webhookId}):`, result.message);
-      res.status(400).json({ error: result.message });
+    if (result.success === false) {
+      console.error(`Webhook error (${webhookId}):`, result.message || result.error);
+      res.status(400).json({ 
+        success: false,
+        error: result.message || result.error || 'Unknown error',
+        webhookId
+      });
     } else {
       console.log(`Webhook processed (${webhookId}):`, result);
-      res.status(200).json(result);
+      res.status(200).json({
+        success: true,
+        ...result,
+        webhookId
+      });
     }
   } catch (error) {
     console.error(`Webhook execution error (${webhookId}):`, error);
@@ -258,14 +383,30 @@ app.post('/webhook/:id', express.json(), verifyWebhookApiKey, async (req, res) =
   }
 });
 
-// Available webhooks listing endpoint (useful for debugging)
+/**
+ * Available webhooks listing endpoint
+ * Returns information about all registered webhooks
+ */
 app.get('/webhooks', verifyWebhookApiKey, (_, res) => {
-  const webhookInfo = webhooks.getWebhooksInfo();
-  res.json({ webhooks: webhookInfo });
+  try {
+    const webhookInfo = webhooks.getWebhooksInfo();
+    res.json({ 
+      success: true,
+      webhooks: webhookInfo,
+      count: webhookInfo.length
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
-// Start the web server
+/**
+ * Initialize and start the HTTP server
+ */
 app.listen(CONFIG.PORT, '0.0.0.0', () => {
-  console.log(`Bot server running at http://0.0.0.0:${CONFIG.PORT}/`);
-  console.log(`Webhooks available at http://0.0.0.0:${CONFIG.PORT}/webhook/:id`);
+  console.log(`✅ Bot server running at http://0.0.0.0:${CONFIG.PORT}/`);
+  console.log(`✅ Webhooks available at http://0.0.0.0:${CONFIG.PORT}/webhook/:id`);
 });

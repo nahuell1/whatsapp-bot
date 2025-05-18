@@ -1,20 +1,33 @@
 /**
- * Weather Command for WhatsApp Bot
- * Fetches weather information from Open-Meteo API (no API key required)
- * https://open-meteo.com/
+ * @module commands/weatherCommand
+ * @description Weather command implementation for the WhatsApp bot
+ * 
+ * This module provides the !clima command for fetching weather information
+ * from the Open-Meteo API. It supports querying by location name and displays
+ * current weather conditions and forecasts.
+ * 
+ * API Documentation: https://open-meteo.com/
+ * 
+ * @requires ./utils
  */
 const { safeApiRequest, formatMessage } = require('./utils');
 
-// Default location configuration
+/**
+ * Default location configuration from environment variables with sensible defaults
+ * @constant {Object}
+ */
 const DEFAULT_CITY = process.env.DEFAULT_CITY || 'Buenos Aires';
-const DEFAULT_LATITUDE = process.env.DEFAULT_LATITUDE || '40.416775';
-const DEFAULT_LONGITUDE = process.env.DEFAULT_LONGITUDE || '-3.703790';
+const DEFAULT_LATITUDE = process.env.DEFAULT_LATITUDE || '-34.6118';
+const DEFAULT_LONGITUDE = process.env.DEFAULT_LONGITUDE || '-58.4173';
 
 /**
- * Get weather emoji based on weather code from Open-Meteo
+ * Get appropriate weather emoji based on weather code and time of day
+ * 
  * @param {number} code - Open-Meteo WMO weather code
- * @param {boolean} isDay - Whether it's currently daytime
- * @returns {string} - Weather emoji
+ * @param {boolean} [isDay=true] - Whether it's currently daytime
+ * @returns {string} - Weather emoji representation
+ * @see https://open-meteo.com/en/docs - WMO Weather interpretation codes
+ * @private
  */
 function getWeatherEmoji(code, isDay = true) {
   // WMO Weather interpretation codes (WW)

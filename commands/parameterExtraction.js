@@ -1,12 +1,16 @@
 /**
- * Parameter extraction utilities for the WhatsApp bot
+ * @module commands/parameterExtraction
+ * @description Parameter extraction utilities for the WhatsApp bot
+ * 
  * This module provides functions to extract parameters from user messages
- * and validate them according to webhook-specific rules
+ * and validate them according to webhook-specific rules. It includes pattern
+ * definitions for common parameter types like areas, states, and devices.
  */
 
 /**
  * Parameter type definitions and extraction patterns
  * @type {Object}
+ * @constant
  */
 const PARAMETER_TYPES = {
   // Areas that can be controlled (e.g., "office", "room")
