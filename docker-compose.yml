@@ -9,8 +9,19 @@ services:
     extra_hosts:
       - "homeassistant.local:192.168.1.100"  # Reemplaza con la IP real de tu Home Assistant
     environment:
+      # AI Provider Configuration
+      - AI_PROVIDER=${AI_PROVIDER:-ollama}
+      
+      # Ollama Configuration
       - OLLAMA_API_URL=${OLLAMA_API_URL:-http://localhost:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-mi-bot}
+      
+      # OpenAI Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-3.5-turbo}
+      - OPENAI_ORG_ID=${OPENAI_ORG_ID}
+      
+      # Bot Configuration
       - PORT=${PORT:-3000}
       - COMMAND_PREFIX=${COMMAND_PREFIX:-!ia}
       - HOMEASSISTANT_URL=${HOMEASSISTANT_URL:-http://homeassistant.local:8123}

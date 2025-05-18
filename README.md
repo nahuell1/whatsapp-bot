@@ -95,8 +95,12 @@ The bot supports multiple commands:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| AI_PROVIDER | AI provider to use ('ollama' or 'openai') | ollama |
 | OLLAMA_API_URL | URL of the Ollama API | http://localhost:11434 |
 | OLLAMA_MODEL | Name of the Ollama model to use | mi-bot |
+| OPENAI_API_KEY | OpenAI API key for using OpenAI | (empty) |
+| OPENAI_MODEL | OpenAI model to use | gpt-3.5-turbo |
+| OPENAI_ORG_ID | OpenAI organization ID (optional) | (empty) |
 | PORT | Port for the web server | 3000 |
 | COMMAND_PREFIX | Command prefix for AI commands | !ia |
 | SESSION_DIR | Directory for storing session data | ./session |

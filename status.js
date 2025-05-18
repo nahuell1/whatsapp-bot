@@ -78,10 +78,22 @@ commandFiles.forEach(file => {
     let status = chalk.green('✓ Ready');
     
     // Check for specific dependencies
-    if (file === 'aiCommand.js') {
-      if (!isEnvSet('OLLAMA_API_URL') || !isEnvSet('OLLAMA_MODEL')) {
-        dependencies.push('Missing OLLAMA_* env vars');
-        status = chalk.yellow('⚠ Check config');
+    if (file === 'aiCommand.js' || file === 'chatbotCommand.js') {
+      const aiProvider = process.env.AI_PROVIDER?.toLowerCase() || 'ollama';
+      
+      if (aiProvider === 'ollama') {
+        if (!isEnvSet('OLLAMA_API_URL') || !isEnvSet('OLLAMA_MODEL')) {
+          dependencies.push('Missing OLLAMA_* env vars');
+          status = chalk.yellow('⚠ Check Ollama config');
+        }
+      } else if (aiProvider === 'openai') {
+        if (!isEnvSet('OPENAI_API_KEY')) {
+          dependencies.push('Missing OPENAI_API_KEY');
+          status = chalk.yellow('⚠ Check OpenAI config');
+        }
+      } else {
+        dependencies.push(`Unknown AI provider: ${aiProvider}`);
+        status = chalk.yellow('⚠ Check AI_PROVIDER value');
       }
     }
     
@@ -125,8 +137,16 @@ console.log('-'.repeat(80));
 
 // Check environment variables
 const envVars = [
+  { name: 'AI_PROVIDER', description: 'AI provider to use', default: 'ollama' },
+  
+  // Ollama settings
   { name: 'OLLAMA_API_URL', description: 'Ollama API URL', default: 'http://localhost:11434' },
   { name: 'OLLAMA_MODEL', description: 'Ollama model name', default: 'mi-bot' },
+  
+  // OpenAI settings
+  { name: 'OPENAI_API_KEY', description: 'OpenAI API key', default: '' },
+  { name: 'OPENAI_MODEL', description: 'OpenAI model name', default: 'gpt-3.5-turbo' },
+  { name: 'OPENAI_ORG_ID', description: 'OpenAI Organization ID', default: '' },
   { name: 'HOMEASSISTANT_URL', description: 'Home Assistant URL', default: 'http://localhost:8123' },
   { name: 'AREA_CONTROL_WEBHOOK_ID', description: 'Home Assistant area control webhook ID', default: 'area_control' },
   { name: 'ADMIN_NUMBERS', description: 'Admin phone numbers', default: null },

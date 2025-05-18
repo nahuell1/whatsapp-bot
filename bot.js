@@ -10,11 +10,24 @@ const qrcodeTerminal = require('qrcode-terminal');
 
 // Environment variables with defaults
 const CONFIG = {
+  // AI provider configuration
+  AI_PROVIDER: process.env.AI_PROVIDER || 'ollama',
+  
+  // Ollama configuration
   OLLAMA_API_URL: process.env.OLLAMA_API_URL || 'http://localhost:11434',
   OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'mi-bot',
+  
+  // OpenAI configuration
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+  OPENAI_MODEL: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+  OPENAI_ORG_ID: process.env.OPENAI_ORG_ID || '',
+  
+  // Server configuration
   PORT: parseInt(process.env.PORT || '3000', 10),
   SESSION_DIR: process.env.SESSION_DIR || path.resolve(__dirname, 'session'),
   COMMAND_PREFIX: process.env.COMMAND_PREFIX || '!ia',
+  
+  // Home Assistant configuration
   HOMEASSISTANT_URL: process.env.HOMEASSISTANT_URL || 'http://localhost:8123',
   WEBHOOK_API_KEY: process.env.WEBHOOK_API_KEY || '',
   REQUIRE_WEBHOOK_AUTH: process.env.REQUIRE_WEBHOOK_AUTH === 'true'

@@ -10,7 +10,17 @@ let whatsappClient = null;
 
 // Configuration from environment variables
 const CONFIG = {
+  // AI provider
+  AI_PROVIDER: process.env.AI_PROVIDER || 'ollama',
+  
+  // Ollama
   OLLAMA_API_URL: process.env.OLLAMA_API_URL || 'http://localhost:11434',
+  OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'mi-bot',
+  
+  // OpenAI
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+  
+  // Home Assistant
   HOMEASSISTANT_URL: process.env.HOMEASSISTANT_URL || 'http://localhost:8123'
 };
 
@@ -203,9 +213,20 @@ async function handleStatusCommand(msg) {
   // Check connected services
   statusMessage += `*Services:*\n`;
   
-  // Check Ollama
-  const ollamaAvailable = await checkServiceAvailable(CONFIG.OLLAMA_API_URL, 'Ollama');
-  statusMessage += `Ollama API: ${ollamaAvailable ? '✅ Online' : '❌ Offline'}\n`;
+  // AI Provider Status
+  statusMessage += `AI Provider: ${CONFIG.AI_PROVIDER.toUpperCase()}\n`;
+  
+  // Check appropriate AI service
+  if (CONFIG.AI_PROVIDER.toLowerCase() === 'openai') {
+    const hasOpenAIKey = !!CONFIG.OPENAI_API_KEY;
+    statusMessage += `OpenAI API: ${hasOpenAIKey ? '✅ Key Configured' : '❌ No API Key'}\n`;
+    statusMessage += `OpenAI Model: ${process.env.OPENAI_MODEL || 'gpt-3.5-turbo'}\n`;
+  } else {
+    // Default to Ollama
+    const ollamaAvailable = await checkServiceAvailable(CONFIG.OLLAMA_API_URL, 'Ollama');
+    statusMessage += `Ollama API: ${ollamaAvailable ? '✅ Online' : '❌ Offline'}\n`;
+    statusMessage += `Ollama Model: ${CONFIG.OLLAMA_MODEL}\n`;
+  }
   
   // Check Home Assistant - use our more reliable method
   const homeAssistantStatus = await getHomeAssistantStatus();
