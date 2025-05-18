@@ -223,9 +223,6 @@ async function handleStatusCommand(msg) {
   // Check connected services
   statusMessage += `*Services:*\n`;
   
-  // AI Provider Status
-  statusMessage += `AI Provider: ${CONFIG.AI_PROVIDER.toUpperCase()}\n`;
-  
   // Check all AI services in the multi-model configuration
   const aiProviders = ['DEFAULT', 'INTENT', 'CHAT', 'FUNCTION'];
   for (const provider of aiProviders) {

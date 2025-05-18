@@ -25,6 +25,7 @@ const { safeApiRequest } = require('./utils');
 // Import the command & webhook handlers to access available functions
 const commandHandler = require('./commandHandler');
 const webhookHandler = require('../webhooks/webhookHandler');
+const parameterExtraction = require('./parameterExtraction');
 
 // Conditionally import OpenAI
 let OpenAI;
@@ -76,6 +77,84 @@ function areFunctionCallsEnabled() {
 
 // Store client reference for executing functions
 let whatsappClient = null;
+
+/**
+ * Get list of available webhook names from the webhook handler
+ * @returns {string[]} - Array of internal webhook names
+ */
+function getAvailableWebhookNames() {
+  return webhookHandler.getWebhooksInfo().map(webhook => webhook.name);
+}
+
+/**
+ * Get webhook parameter schema for OpenAI function definition
+ * @param {string} webhookName - Name of the webhook
+ * @returns {object} - Schema for function parameters
+ */
+function getWebhookParametersSchema(webhookName) {
+  // Get parameter info for this webhook
+  const paramInfo = parameterExtraction.getWebhookParameterInfo(webhookName);
+  const paramDefs = parameterExtraction.getParameterDefinitions(webhookName);
+  
+  // Create properties object for each parameter
+  const properties = {};
+  
+  // For each parameter defined for this webhook
+  if (paramDefs && paramDefs.parameters) {
+    for (const [paramName, paramDef] of Object.entries(paramDefs.parameters)) {
+      properties[paramName] = {
+        type: "string",
+        description: paramDef.description || `Parameter ${paramName} for ${webhookName}`,
+      };
+      
+      // Add enum if we have valid values
+      if (paramDef.validValues && paramDef.validValues.length > 0) {
+        properties[paramName].enum = paramDef.validValues;
+      }
+    }
+  }
+  
+  const schema = {
+    type: "object",
+    description: `Data for ${webhookName} webhook`,
+    properties: properties,
+    required: paramInfo.required || []
+  };
+  
+  return schema;
+}
+
+/**
+ * Generate OpenAI function definitions for all webhooks
+ * @returns {Array} - Array of function definitions
+ */
+function generateWebhookFunctionDefinitions() {
+  // Get all webhook names
+  const webhookNames = getAvailableWebhookNames();
+  
+  // Create a function definition for each webhook
+  return webhookNames.map(webhookName => {
+    const webhookInfo = webhookHandler.findWebhook(webhookName);
+    if (!webhookInfo) return null;
+    
+    return {
+      name: "execute_webhook",
+      description: `Execute the ${webhookName} webhook to control Home Assistant`,
+      parameters: {
+        type: "object",
+        properties: {
+          webhook: {
+            type: "string",
+            description: "The webhook name to execute (internal name)",
+            enum: [webhookName]
+          },
+          data: getWebhookParametersSchema(webhookName)
+        },
+        required: ["webhook", "data"],
+      },
+    };
+  }).filter(Boolean); // Filter out any null entries
+}
 
 /**
  * Extract command and args from a potential function call in AI response
@@ -338,6 +417,50 @@ function generateSystemPrompt() {
       return paramSpecs ? `${basicInfo}\n${paramSpecs}` : basicInfo;
     });
 
+  // Build specific webhook parameter information
+  const webhookParamInfo = [];
+  
+  // For each webhook, get detailed parameter info
+  const webhookList = webhookHandler.getWebhooksInfo();
+  for (const webhook of webhookList) {
+    try {
+      const paramInfo = parameterExtraction.getWebhookParameterInfo(webhook.name);
+      const paramDefs = parameterExtraction.getParameterDefinitions(webhook.name);
+      
+      let paramDetails = `${webhook.name}: ${webhook.description}\n`;
+      paramDetails += 'Required parameters:\n';
+      
+      // Add required parameters with their valid values
+      for (const paramName of paramInfo.required) {
+        const paramDef = paramDefs.parameters[paramName];
+        const validValues = paramDef && paramDef.validValues ? ` (valid values: ${paramDef.validValues.join(', ')})` : '';
+        paramDetails += `- ${paramName}${validValues}\n`;
+      }
+      
+      // Add optional parameters
+      if (paramInfo.optional && paramInfo.optional.length > 0) {
+        paramDetails += 'Optional parameters:\n';
+        for (const paramName of paramInfo.optional) {
+          const paramDef = paramDefs.parameters[paramName];
+          const validValues = paramDef && paramDef.validValues ? ` (valid values: ${paramDef.validValues.join(', ')})` : '';
+          paramDetails += `- ${paramName}${validValues}\n`;
+        }
+      }
+      
+      // Add examples
+      if (paramDefs.examples && paramDefs.examples.length > 0) {
+        paramDetails += 'Examples:\n';
+        for (const example of paramDefs.examples) {
+          paramDetails += `- ${JSON.stringify(example)}\n`;
+        }
+      }
+      
+      webhookParamInfo.push(paramDetails);
+    } catch (error) {
+      console.error(`Error getting parameter info for ${webhook.name}:`, error);
+    }
+  }
+
   const systemPrompt = `
 You are a smart WhatsApp assistant capable of answering questions and executing commands.
 Respond concisely, clearly, and in a friendly, natural tone.
@@ -346,7 +469,7 @@ AVAILABLE COMMANDS WITH PARAMETERS:
 ${availableCommands.join('\n\n')}
 
 AVAILABLE WEBHOOKS WITH PARAMETERS:
-${availableWebhooks.join('\n\n')}
+${webhookParamInfo.join('\n\n')}
 
 FUNCTION EXECUTION CAPABILITIES:
 If the user requests an action that matches an available command or webhook,
@@ -367,12 +490,19 @@ For webhooks:
   - Parameter names must match EXACTLY what's specified in the requirements
   - CRITICAL: Missing or incorrect parameters will cause the action to fail
 
-PARAMETER REQUIREMENTS ARE CRITICAL:
-- Required parameters must always be included
+PARAMETER VALIDATION IS CRITICAL:
+- Required parameters must always be included in the data object
 - Optional parameters can be omitted, but if included must use the correct format
-- String values should be in quotes
+- String values should be in quotes in the JSON object
 - Do not add parameters that aren't specified in the requirements
-- For webhooks, the exact parameter name and structure is crucial
+- For webhooks, using the exact parameter name and valid values is crucial
+- If a parameter has a list of valid values, you MUST use one from the list
+
+WEBHOOK PARAMETER EXAMPLES:
+- Area Control: __execute_webhook("area_control", {"area": "office", "turn": "off"})
+- Device Control: __execute_webhook("device_control", {"device": "light", "action": "on"})
+- Scene Activation: __execute_webhook("scene", {"scene": "movie"})
+- Notification: __execute_webhook("send_notification", {"message": "Hello", "to": "admin"})
 
 USAGE EXAMPLES:
 1. If the user asks: "What's the weather like in Madrid?"
@@ -487,10 +617,26 @@ async function callOpenAI(model, systemPrompt, userMessage, options = {}) {
     
     // Add function calling if specified in options
     if (options.functions) {
-      apiParams.tools = options.functions.map(func => ({ 
-        type: "function", 
-        function: func 
-      }));
+      // For FUNCTION_AI_PROVIDER, use dynamically generated webhook functions
+      if (options.purpose === 'function' || options.purpose === 'webhook') {
+        // Generate webhook-specific function definitions based on parameter extraction
+        const webhookFunctions = generateWebhookFunctionDefinitions();
+        
+        // Add the command function and any other functions from options
+        const commandFunction = options.functions.find(f => f.name === 'execute_command');
+        const allFunctions = commandFunction ? [commandFunction, ...webhookFunctions] : [...webhookFunctions, ...options.functions];
+        
+        apiParams.tools = allFunctions.map(func => ({ 
+          type: "function", 
+          function: func 
+        }));
+      } else {
+        // For other purposes, use the functions as provided
+        apiParams.tools = options.functions.map(func => ({ 
+          type: "function", 
+          function: func 
+        }));
+      }
     }
     
     const completion = await openai.chat.completions.create(apiParams);
@@ -515,9 +661,26 @@ async function callOpenAI(model, systemPrompt, userMessage, options = {}) {
             args: functionArgs.args || '',
           };
         } else if (functionName === 'execute_webhook') {
+          // Get webhook info
+          const webhookName = functionArgs.webhook;
+          const webhookInfo = webhookHandler.findWebhook(webhookName);
+          let webhookData = functionArgs.data || {};
+          
+          if (webhookInfo) {
+            // Extract parameter specifications for this webhook
+            const paramSpecs = extractWebhookParameters(webhookName);
+            
+            if (Object.keys(webhookData).length === 0) {
+              console.warn(`${webhookName} webhook missing parameters, attempting to extract from user message`);
+              
+              // Extract parameters from user message based on parameter specifications
+              webhookData = extractParametersFromMessage(userMessage, webhookName, paramSpecs);
+            }
+          }
+          
           functionCall = {
             webhook: functionArgs.webhook,
-            data: functionArgs.data || {},
+            data: webhookData
           };
         } else if (functionName === 'detect_intent') {
           functionCall = {
@@ -769,68 +932,93 @@ async function handleChatbotMessage(msg, text) {
     let aiResponse = null;
     let functionCall = null;
     
-    // Functions definition for OpenAI function calling
-    const functions = [
-      {
-        name: "execute_command",
-        description: "Execute a WhatsApp bot command",
-        parameters: {
-          type: "object",
-          properties: {
-            command: {
-              type: "string",
-              description: "The command to execute, including the ! prefix",
-            },
-            args: {
-              type: "string",
-              description: "The arguments to pass to the command",
-            },
+    console.log(`Processing message with detected intent: ${detectedIntent}`);
+    
+    // Common function definition for command execution
+    const commandFunction = {
+      name: "execute_command",
+      description: "Execute a WhatsApp bot command",
+      parameters: {
+        type: "object",
+        properties: {
+          command: {
+            type: "string",
+            description: "The command to execute, including the ! prefix",
           },
-          required: ["command"],
-        },
-      },
-      {
-        name: "execute_webhook",
-        description: "Execute a webhook to control Home Assistant",
-        parameters: {
-          type: "object",
-          properties: {
-            webhook: {
-              type: "string",
-              description: "The webhook name to execute (internal name, e.g. area_control)",
-            },
-            data: {
-              type: "object",
-              description: "The data to send to the webhook",
-            },
+          args: {
+            type: "string",
+            description: "The arguments to pass to the command",
           },
-          required: ["webhook", "data"],
         },
+        required: ["command"],
       },
-      {
-        name: "detect_intent",
-        description: "Detect the user's intent from their message",
-        parameters: {
-          type: "object",
-          properties: {
-            intent: {
-              type: "string",
-              enum: ["CHAT", "COMMAND", "WEBHOOK"],
-              description: "The detected intent type",
-            },
-            confidence: {
-              type: "number",
-              description: "Confidence score between 0 and 1",
-            },
-            reason: {
-              type: "string",
-              description: "Reason for the intent classification",
-            }
+    };
+    
+    // Define API options based on intent
+    let aiProviderName = CONFIG.CHAT_AI_PROVIDER;  // Default to chat provider
+    let modelName = CONFIG.CHAT_AI_MODEL;          // Default to chat model
+    let purpose = 'chat';                          // Default purpose
+    let functionsToUse = [];                       // No functions by default
+    
+    // Adjust model and functions based on intent
+    if (detectedIntent === 'COMMAND') {
+      aiProviderName = CONFIG.FUNCTION_AI_PROVIDER;
+      modelName = CONFIG.FUNCTION_AI_MODEL;
+      purpose = 'command';
+      functionsToUse = [commandFunction];
+    } else if (detectedIntent === 'WEBHOOK') {
+      aiProviderName = CONFIG.FUNCTION_AI_PROVIDER;
+      modelName = CONFIG.FUNCTION_AI_MODEL;
+      purpose = 'webhook';
+      // For webhooks, we'll generate dynamic function definitions in the callAIModel function
+      functionsToUse = [commandFunction]; // Add command function as a base
+    }
+    
+    // Add the webhook function definition
+    functionsToUse.push({
+      name: "execute_webhook",
+      description: "Execute a webhook to control Home Assistant",
+      parameters: {
+        type: "object",
+        properties: {
+          webhook: {
+            type: "string",
+            description: "The webhook name to execute (internal name)",
+            enum: getAvailableWebhookNames()
           },
-          required: ["intent"],
+          data: {
+            type: "object",
+            description: "The data to send to the webhook. The required parameters depend on which webhook is being called."
+          }
         },
-      },
-    ];
+        required: ["webhook", "data"],
+      }
+    });
+    
+    // Add the intent detection function if needed
+    functionsToUse.push({
+      name: "detect_intent",
+      description: "Detect the user's intent from their message",
+      parameters: {
+        type: "object",
+        properties: {
+          intent: {
+            type: "string",
+            enum: ["CHAT", "COMMAND", "WEBHOOK"],
+            description: "The detected intent type",
+          },
+          confidence: {
+            type: "number",
+            description: "Confidence score between 0 and 1",
+          },
+          reason: {
+            type: "string",
+            description: "Reason for the intent classification",
+          }
+        },
+        required: ["intent"],
+      }
+    });
     
     if (detectedIntent === 'CHAT') {
       // For chat intent, use the chat model
@@ -860,11 +1048,11 @@ Avoid suggesting actions that would require executing commands or webhooks.`;
       
       try {
         const functionResponse = await callAIModel(
-          CONFIG.FUNCTION_AI_PROVIDER,
-          CONFIG.FUNCTION_AI_MODEL,
+          aiProviderName,
+          modelName,
           systemPrompt,
           text,
-          { purpose: 'function', functions: functions }
+          { purpose: purpose, functions: functionsToUse }
         );
         
         aiResponse = functionResponse.text;
@@ -949,6 +1137,29 @@ Avoid suggesting actions that would require executing commands or webhooks.`;
           await msg.reply(`❌ No encontré el webhook "${functionCall.webhook}". Por favor verifica el nombre.`);
           return;
         }
+        
+        // First, try to extract any missing parameters from the user message
+        const initialParams = functionCall.data || {};
+        const extractedParams = parameterExtraction.extractParametersFromMessage(text, webhookInfo.name, initialParams);
+        
+        // Replace the original data with the combined parameters
+        functionCall.data = extractedParams;
+        
+        // Validate the parameters
+        const validationResult = parameterExtraction.validateParameters(webhookInfo.name, functionCall.data);
+        
+        if (!validationResult.isValid) {
+          // Generate a helpful error message based on validation results
+          const errorMessage = parameterExtraction.generateErrorMessage(webhookInfo.name, validationResult);
+          await msg.reply(errorMessage);
+          
+          // For debugging only
+          console.log('Parameter validation failed:', validationResult);
+          return;
+        }
+        
+        // Log extracted parameters for debugging
+        console.log('Final parameters for webhook call:', functionCall.data);
         
         // Log the function call
         await logFunctionCall('webhook', {
