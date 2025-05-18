@@ -34,17 +34,28 @@ try {
   console.warn('OpenAI package not available:', error.message);
 }
 
-// Configuration
+// Configuration with support for multiple models for different purposes
 const CONFIG = {
-  // Ollama configuration
+  // API URLs and Authentication
   OLLAMA_API_URL: process.env.OLLAMA_API_URL || 'http://localhost:11434',
-  OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'mi-bot',
-  
-  // OpenAI configuration
-  AI_PROVIDER: process.env.AI_PROVIDER || 'ollama', // 'ollama' or 'openai'
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
-  OPENAI_MODEL: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
-  OPENAI_ORG_ID: process.env.OPENAI_ORG_ID || ''
+  OPENAI_ORG_ID: process.env.OPENAI_ORG_ID || '',
+  
+  // Default provider and model (used if specific ones not set)
+  DEFAULT_AI_PROVIDER: process.env.DEFAULT_AI_PROVIDER || 'ollama', // 'ollama' or 'openai'
+  DEFAULT_AI_MODEL: process.env.DEFAULT_AI_MODEL || 'mi-bot',
+  
+  // Intent detection model (small model to classify intent)
+  INTENT_AI_PROVIDER: process.env.INTENT_AI_PROVIDER || process.env.DEFAULT_AI_PROVIDER || 'ollama',
+  INTENT_AI_MODEL: process.env.INTENT_AI_MODEL || process.env.DEFAULT_AI_MODEL || 'mi-bot',
+  
+  // Chat model (for regular conversations)
+  CHAT_AI_PROVIDER: process.env.CHAT_AI_PROVIDER || process.env.DEFAULT_AI_PROVIDER || 'ollama',
+  CHAT_AI_MODEL: process.env.CHAT_AI_MODEL || process.env.DEFAULT_AI_MODEL || 'mi-bot',
+  
+  // Function model (for executing commands and webhooks)
+  FUNCTION_AI_PROVIDER: process.env.FUNCTION_AI_PROVIDER || process.env.DEFAULT_AI_PROVIDER || 'ollama',
+  FUNCTION_AI_MODEL: process.env.FUNCTION_AI_MODEL || process.env.DEFAULT_AI_MODEL || 'mi-bot',
 };
 
 // Function to check if function calls are enabled
@@ -73,46 +84,227 @@ let whatsappClient = null;
  */
 function parseFunctionCall(functionCall) {
   try {
-    // Check if the functionCall contains a valid function call format
-    // We're looking for patterns like: __execute_command("!command", "args")
-    const match = functionCall.match(/__execute_command\(['"]([^'"]+)['"](?:,\s*['"]([^'"]+)['"])?\)/);
-    
-    if (match) {
-      return {
-        command: match[1],
-        args: match[2] || ''
-      };
-    }
-    
-    // Check for webhook execution pattern: __execute_webhook("webhook_id", {data})
-    const webhookMatch = functionCall.match(/__execute_webhook\(['"]([^'"]+)['"](?:,\s*({.+?}))?\)/s);
-    if (webhookMatch) {
-      try {
-        const webhookId = webhookMatch[1];
-        const webhookDataStr = webhookMatch[2] || '{}';
-        
-        // Replace single quotes with double quotes for proper JSON parsing
-        const jsonStr = webhookDataStr
-          .replace(/'/g, '"')
-          // Handle special case for JSON property names without quotes
-          .replace(/(\w+):/g, '"$1":');
-        
-        const webhookData = JSON.parse(jsonStr);
-        
-        return {
-          webhook: webhookId,
-          data: webhookData
-        };
-      } catch (parseError) {
-        console.error('Error parsing webhook data:', parseError);
-        console.error('Raw webhook data string:', webhookMatch[2]);
-      }
-    }
-    
-    return null;
+    return parseFunctionCallText(functionCall);
   } catch (error) {
     console.error('Error parsing function call:', error);
     return null;
+  }
+}
+
+/**
+ * Extract parameter specifications from command files
+ * @param {string} commandName - Name of the command (e.g., "!clima")
+ * @returns {string} - Parameter specifications or empty string if not found
+ */
+function extractCommandParameters(commandName) {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Remove the ! prefix and convert to camelCase if needed
+    const baseCommandName = commandName.replace(/^!/, '');
+    const filePath = path.join(__dirname, `${baseCommandName}Command.js`);
+    
+    // Check if the file exists
+    if (!fs.existsSync(filePath)) {
+      return '';
+    }
+    
+    // Read the file content
+    const fileContent = fs.readFileSync(filePath, 'utf8');
+    
+    // Strategy 1: Look for JSDoc with @param for args parameter in handler function
+    const jsdocRegex = /\/\*\*[\s\S]*?@param[\s\S]*?{string}[\s\S]*?args[\s\S]*?-[\s\S]*?(.*?)[\s\S]*?\*\//;
+    const jsdocMatch = fileContent.match(jsdocRegex);
+    
+    if (jsdocMatch && jsdocMatch[1]) {
+      const paramDesc = jsdocMatch[1].trim();
+      if (paramDesc) {
+        return `Parameters for ${commandName}: ${paramDesc}`;
+      }
+    }
+    
+    // Strategy 2: Look for JSDoc in the handler registration
+    const registerJsdocRegex = new RegExp(`register\\([\\s\\n]*['"]${commandName}['"][\\s\\n]*,[\\s\\n]*\\w+[\\s\\n]*,[\\s\\n]*['"]([^'"]+)['"]`);
+    const registerMatch = fileContent.match(registerJsdocRegex);
+    
+    if (registerMatch && registerMatch[1]) {
+      const helpText = registerMatch[1].trim();
+      // Extract parameter info from help text if it contains a format like: command [param]
+      const paramMatch = helpText.match(/\[([^\]]+)\]/);
+      if (paramMatch) {
+        return `Parameters for ${commandName}: ${paramMatch[1]}`;
+      }
+    }
+    
+    // Strategy 3: Look for in-line documentation in the handler function
+    const handlerRegex = /function\s+handle\w+Command\s*\([^)]*\)\s*{[\s\S]*?(?:const|let)\s+([^=]+)\s*=\s*args\.trim\(\)/;
+    const handlerMatch = fileContent.match(handlerRegex);
+    
+    if (handlerMatch && handlerMatch[1]) {
+      const paramName = handlerMatch[1].trim();
+      // Try to find comments describing this variable
+      const paramCommentRegex = new RegExp(`(?:\\/\\/|\\*|\\/)\\s*${paramName}\\s*:?\\s*(.+?)(?:\\n|$)`, 'i');
+      const paramCommentMatch = fileContent.match(paramCommentRegex);
+      
+      if (paramCommentMatch && paramCommentMatch[1]) {
+        return `Parameters for ${commandName}: ${paramCommentMatch[1].trim()}`;
+      }
+      
+      // Strategy 4: Look for parameter validation checks
+      const validationRegex = new RegExp(`if\\s*\\(!${paramName}\\)\\s*{[\\s\\S]*?(?:required|missing)`, 'i');
+      const validationMatch = fileContent.match(validationRegex);
+      
+      if (validationMatch) {
+        return `Parameters for ${commandName}: ${paramName} (required)`;
+      }
+      
+      return `Parameters for ${commandName}: ${paramName} (optional)`;
+    }
+    
+    // Strategy 5: Special case handling for specific commands
+    if (baseCommandName === 'clima' || baseCommandName === 'weather') {
+      return `Parameters for ${commandName}: city name (optional, default: ${process.env.DEFAULT_CITY || 'Buenos Aires'})`;
+    } else if (baseCommandName === 'subscribe') {
+      return `Parameters for ${commandName}: channel name (required, e.g., "home", "notifications", "alerts")`;
+    } else if (baseCommandName === 'unsubscribe') {
+      return `Parameters for ${commandName}: channel name (required, e.g., "home", "notifications", "alerts")`;
+    } else if (baseCommandName === 'notify') {
+      return `Parameters for ${commandName}: channel message (required, format: "channel_name Your message here")`;
+    }
+    
+    return '';
+  } catch (error) {
+    console.error(`Error extracting parameters for ${commandName}:`, error);
+    return '';
+  }
+}
+
+/**
+ * Extract parameter specifications from webhook files
+ * @param {string} webhookName - Name of the webhook
+ * @returns {string} - Parameter specifications or empty string if not found
+ */
+function extractWebhookParameters(webhookName) {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    
+    const filePath = path.join(__dirname, `../webhooks/${webhookName}Webhook.js`);
+    
+    // Check if the file exists
+    if (!fs.existsSync(filePath)) {
+      return '';
+    }
+    
+    // Read the file content
+    const fileContent = fs.readFileSync(filePath, 'utf8');
+    
+    // Strategy 1: Try to extract from JSDoc comments for the handler function
+    // Fix the regex to correctly match JSDoc format for params
+    const jsdocRegex = /\/\*\*[\s\S]*?handle\w+Webhook[\s\S]*?@param\s+{object}\s+data[\s\S]*?@param\s+{([^}]+)}\s+data\.([^\s-]+)[\s\S]*?-[\s\S]*?(.*?)[\s\S]*?(?:\*\/|\n\s*\*\s*@)/g;
+    
+    let params = [];
+    let match;
+    while ((match = jsdocRegex.exec(fileContent)) !== null) {
+      const paramType = match[1].trim();
+      const paramName = match[2].trim();
+      const paramDesc = match[3].trim();
+      params.push(`${paramName} (${paramType}): ${paramDesc}`);
+    }
+    
+    // If we found parameters in JSDoc, return them
+    if (params.length > 0) {
+      return `Required parameters for ${webhookName}:\n- ${params.join('\n- ')}`;
+    }
+    
+    // Strategy 2: Try to find JSDoc with all parameters documented
+    const fullJsdocRegex = /\/\*\*[\s\S]*?handle\w+Webhook[\s\S]*?@param\s+{object}\s+data[\s\S]*?\*\//;
+    const fullJsdocMatch = fileContent.match(fullJsdocRegex);
+    
+    if (fullJsdocMatch) {
+      // Look for individual data parameter documentation
+      const paramRegex = /@param\s+{([^}]+)}\s+data\.([^\s-]+)[\s\S]*?-[\s\S]*?([^\n]*)/g;
+      let paramMatch;
+      let jsdocParams = [];
+      
+      while ((paramMatch = paramRegex.exec(fullJsdocMatch[0])) !== null) {
+        const paramType = paramMatch[1].trim();
+        const paramName = paramMatch[2].trim();
+        const paramDesc = paramMatch[3].trim();
+        jsdocParams.push(`${paramName} (${paramType}): ${paramDesc}`);
+      }
+      
+      if (jsdocParams.length > 0) {
+        return `Required parameters for ${webhookName}:\n- ${jsdocParams.join('\n- ')}`;
+      }
+    }
+    
+    // Strategy 3: Try to find parameter destructuring in the handler function
+    const destructuringRegex = /const\s+{([^}]+)}\s*=\s*data/;
+    const destructuringMatch = fileContent.match(destructuringRegex);
+    
+    if (destructuringMatch && destructuringMatch[1]) {
+      params = destructuringMatch[1]
+        .split(',')
+        .map(param => {
+          const [name, defaultValue] = param.split('=').map(p => p.trim());
+          if (defaultValue) {
+            return `${name} (optional, default: ${defaultValue})`;
+          }
+          return `${name} (required)`;
+        });
+        
+      return `Required parameters for ${webhookName}:\n- ${params.join('\n- ')}`;
+    }
+    
+    // Strategy 4: Try to find parameter validation checks
+    const validationRegex = /if\s*\(!([a-zA-Z0-9_]+)\)\s*{[\s\S]*?(?:missing|required|invalid).*?(?:parameter|field)/gi;
+    let validationParams = [];
+    while ((match = validationRegex.exec(fileContent)) !== null) {
+      validationParams.push(`${match[1]} (required)`);
+    }
+    
+    if (validationParams.length > 0) {
+      return `Required parameters for ${webhookName}:\n- ${validationParams.join('\n- ')}`;
+    }
+    
+    // Strategy 5: Check for valid values in validation logic
+    const validValuesRegex = /if\s*\(!([a-zA-Z0-9_]+\.includes\(['"]([^'"]+)['"]\))[\s\S]*?([a-zA-Z0-9_]+).*?not valid/i;
+    const validValuesMatch = fileContent.match(validValuesRegex);
+    
+    if (validValuesMatch) {
+      const validValuesList = validValuesMatch[2].split(',').map(v => v.trim());
+      return `Required parameters for ${webhookName}:\n- ${validValuesMatch[3]} (required, valid values: ${validValuesList.join(', ')})`;
+    }
+    
+    // Strategy 6: Hardcoded known webhook parameters for better documentation
+    if (webhookName === 'areaControl') {
+      return `Required parameters for ${webhookName}:
+- area (string): The area to control (valid values: office, room)
+- turn (string): The state to set (valid values: on, off)`;
+    } else if (webhookName === 'sendNotification' || webhookName === 'notification') {
+      return `Required parameters for ${webhookName}:
+- message (string): The message text to send
+- to (string or array): The recipient(s) phone number or "admin" for admin users
+- title (string, optional): Title for the message`;
+    } else if (webhookName === 'deviceControl') {
+      return `Required parameters for ${webhookName}:
+- device (string): The device ID to control
+- action (string): The action to perform (valid values: on, off, toggle)`;
+    } else if (webhookName === 'scene') {
+      return `Required parameters for ${webhookName}:
+- scene (string): The scene name to activate`;
+    } else if (webhookName === 'sensorReport') {
+      return `Required parameters for ${webhookName}:
+- sensor (string): The sensor ID to report
+- type (string, optional): The type of report (valid values: current, history)`;
+    }
+    
+    return '';
+  } catch (error) {
+    console.error(`Error extracting parameters for ${webhookName}:`, error);
+    return '';
   }
 }
 
@@ -121,46 +313,70 @@ function parseFunctionCall(functionCall) {
  * @returns {string} - System prompt with available commands and webhooks
  */
 function generateSystemPrompt() {
-  // Get all available commands
+  // For filesystem operations
+  const fs = require('fs');
+  const path = require('path');
+  
+  // Get all available commands with their help text
   const availableCommands = Array.from(commandHandler.commands.keys())
     .map(cmd => {
       const helpIndex = commandHandler.helpMessages.findIndex(help => help.startsWith(cmd));
       const helpText = helpIndex >= 0 ? commandHandler.helpMessages[helpIndex] : cmd;
-      return helpText;
+      
+      // Extract parameter specifications
+      const paramSpecs = extractCommandParameters(cmd);
+      return paramSpecs ? `${helpText}\n${paramSpecs}` : helpText;
     });
   
-  // Get all available webhooks
+  // Get all available webhooks with their descriptions and parameter requirements
   const availableWebhooks = webhookHandler.getWebhooksInfo()
-    .map(webhook => `${webhook.name}: ${webhook.description}`);
+    .map(webhook => {
+      const basicInfo = `${webhook.name}: ${webhook.description}`;
+      
+      // Extract parameter specifications
+      const paramSpecs = extractWebhookParameters(webhook.name);
+      return paramSpecs ? `${basicInfo}\n${paramSpecs}` : basicInfo;
+    });
 
   const systemPrompt = `
 You are a smart WhatsApp assistant capable of answering questions and executing commands.
 Respond concisely, clearly, and in a friendly, natural tone.
 
-AVAILABLE COMMANDS:
-${availableCommands.join('\n')}
+AVAILABLE COMMANDS WITH PARAMETERS:
+${availableCommands.join('\n\n')}
 
-AVAILABLE WEBHOOKS:
-${availableWebhooks.join('\n')}
+AVAILABLE WEBHOOKS WITH PARAMETERS:
+${availableWebhooks.join('\n\n')}
 
 FUNCTION EXECUTION CAPABILITIES:
 If the user requests an action that matches an available command or webhook,
-you MUST use the corresponding function to execute it properly.
+you MUST use the corresponding function to execute it properly, following the specified parameter requirements EXACTLY.
 
 For commands: 
   __execute_command("!command", "arguments")
   - The first parameter must be the full command including the '!' symbol
   - The second parameter should be the arguments as a string
+  - Refer to the command's parameter specifications above when formatting arguments
+  - IMPORTANT: Follow the exact parameter format required by each command
 
 For webhooks: 
   __execute_webhook("webhook_name", {data})
   - The first parameter is the webhook internal name (e.g., "area_control", "send_notification")
-  - The AI should use the internal name, and the system will automatically map it to the correct external ID
-  - The second parameter is a JSON object with the required data
+  - The second parameter is a JSON object with the required parameters EXACTLY as specified above
+  - All required parameters must be included with the correct data types
+  - Parameter names must match EXACTLY what's specified in the requirements
+  - CRITICAL: Missing or incorrect parameters will cause the action to fail
+
+PARAMETER REQUIREMENTS ARE CRITICAL:
+- Required parameters must always be included
+- Optional parameters can be omitted, but if included must use the correct format
+- String values should be in quotes
+- Do not add parameters that aren't specified in the requirements
+- For webhooks, the exact parameter name and structure is crucial
 
 USAGE EXAMPLES:
-1. If the user asks: "What's the weather like in Buenos Aires?"
-   Your response: "I'll check the weather for you. __execute_command("!clima", "Buenos Aires")"
+1. If the user asks: "What's the weather like in Madrid?"
+   Your response: "I'll check the weather for you. __execute_command("!clima", "Madrid")"
 
 2. If the user says: "Turn off the office lights"
    Your response: "Turning off the office lights. __execute_webhook("area_control", {"area": "office", "turn": "off"})"
@@ -168,10 +384,13 @@ USAGE EXAMPLES:
 3. If the user says: "Send a message to Luis saying I'll be late"
    Your response: "Sending the notification. __execute_webhook("send_notification", {"to": "Luis", "message": "I'll be late"})"
 
+4. If the user says: "Active the movie scene"
+   Your response: "Activating the movie scene. __execute_webhook("scene", {"scene": "movie"})"
+
 DO NOT use these functions if the user isn't clearly requesting a related action.
 If the user simply asks a general question that doesn't require executing a specific action, just reply normally.
 When using a function, briefly explain what you're going to do before calling the function.
-
+For each webhook, use EXACTLY the parameter names and structure specified in the parameter requirements.
 `;
 
   return systemPrompt;
@@ -216,6 +435,260 @@ async function logFunctionCall(type, data) {
 }
 
 /**
+ * Call AI model based on specified provider and model
+ * @param {string} provider - AI provider ('ollama' or 'openai')
+ * @param {string} model - Model name to use
+ * @param {string} systemPrompt - System prompt to send
+ * @param {string} userMessage - User message to process
+ * @param {object} options - Additional options like function definitions
+ * @returns {Promise<object>} - Response with text and function call info
+ */
+async function callAIModel(provider, model, systemPrompt, userMessage, options = {}) {
+  console.log(`Calling ${provider.toUpperCase()} model "${model}" for purpose: ${options.purpose || 'general'}`);
+  
+  if (provider.toLowerCase() === 'openai' && OpenAI && CONFIG.OPENAI_API_KEY) {
+    return callOpenAI(model, systemPrompt, userMessage, options);
+  } else {
+    return callOllama(model, systemPrompt, userMessage, options);
+  }
+}
+
+/**
+ * Call OpenAI with the provided parameters
+ * @param {string} model - OpenAI model to use
+ * @param {string} systemPrompt - System prompt
+ * @param {string} userMessage - User message
+ * @param {object} options - Additional options
+ * @returns {Promise<object>} - Response with text and function call info
+ */
+async function callOpenAI(model, systemPrompt, userMessage, options = {}) {
+  try {
+    // Initialize OpenAI client
+    const openaiOptions = {
+      apiKey: CONFIG.OPENAI_API_KEY,
+    };
+    
+    if (CONFIG.OPENAI_ORG_ID) {
+      openaiOptions.organization = CONFIG.OPENAI_ORG_ID;
+    }
+    
+    const openai = new OpenAI(openaiOptions);
+    
+    // Call OpenAI API
+    const apiParams = {
+      model: model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage }
+      ],
+      temperature: options.temperature || 0.7,
+      max_tokens: options.maxTokens || 800,
+    };
+    
+    // Add function calling if specified in options
+    if (options.functions) {
+      apiParams.tools = options.functions.map(func => ({ 
+        type: "function", 
+        function: func 
+      }));
+    }
+    
+    const completion = await openai.chat.completions.create(apiParams);
+    
+    const responseMessage = completion.choices[0]?.message;
+    let functionCall = null;
+    
+    // Check if the model wants to call a function
+    if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+      const toolCall = responseMessage.tool_calls[0];
+      
+      if (toolCall.function) {
+        const functionName = toolCall.function.name;
+        const functionArgs = JSON.parse(toolCall.function.arguments);
+        
+        console.log(`OpenAI requested function call: ${functionName}`, functionArgs);
+        
+        // Convert to our internal function call format
+        if (functionName === 'execute_command') {
+          functionCall = {
+            command: functionArgs.command,
+            args: functionArgs.args || '',
+          };
+        } else if (functionName === 'execute_webhook') {
+          functionCall = {
+            webhook: functionArgs.webhook,
+            data: functionArgs.data || {},
+          };
+        } else if (functionName === 'detect_intent') {
+          functionCall = {
+            intent: functionArgs.intent,
+            confidence: functionArgs.confidence || 0.0,
+            reason: functionArgs.reason || '',
+          };
+        }
+      }
+    }
+    
+    return {
+      text: responseMessage.content || '',
+      functionCall: functionCall,
+      raw: responseMessage
+    };
+  } catch (error) {
+    console.error('Error using OpenAI API:', error);
+    throw error;
+  }
+}
+
+/**
+ * Call Ollama with the provided parameters
+ * @param {string} model - Ollama model to use
+ * @param {string} systemPrompt - System prompt
+ * @param {string} userMessage - User message
+ * @param {object} options - Additional options
+ * @returns {Promise<object>} - Response with text and function call info
+ */
+async function callOllama(model, systemPrompt, userMessage, options = {}) {
+  try {
+    const data = await safeApiRequest(`${CONFIG.OLLAMA_API_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage }
+        ],
+        stream: false
+      })
+    }, 120000); // 120 second timeout
+    
+    const responseText = data.message?.content || data.response || 'No recibí respuesta clara del modelo de IA.';
+    
+    // For Ollama, parse any function calls from the text response
+    let functionCall = null;
+    if (options.purpose === 'function' || options.purpose === 'intent') {
+      const functionCallRegex = /__execute_(?:command|webhook|intent)\([^)]+\)/;
+      const functionCallMatch = responseText.match(functionCallRegex);
+      
+      if (functionCallMatch) {
+        functionCall = parseFunctionCallText(functionCallMatch[0]);
+      }
+    }
+    
+    return {
+      text: responseText,
+      functionCall: functionCall,
+      raw: data
+    };
+  } catch (error) {
+    console.error('Error using Ollama API:', error);
+    throw error;
+  }
+}
+
+/**
+ * Parse function call from text response (used for Ollama responses)
+ * @param {string} functionCallText - The function call text to parse
+ * @returns {object|null} - Parsed function call or null
+ */
+function parseFunctionCallText(functionCallText) {
+  // Existing command parsing logic
+  const commandMatch = functionCallText.match(/__execute_command\(['"]([^'"]+)['"](?:,\s*['"]([^'"]+)['"])?\)/);
+  if (commandMatch) {
+    return {
+      command: commandMatch[1],
+      args: commandMatch[2] || ''
+    };
+  }
+  
+  // Existing webhook parsing logic
+  const webhookMatch = functionCallText.match(/__execute_webhook\(['"]([^'"]+)['"](?:,\s*({.+?}))?\)/s);
+  if (webhookMatch) {
+    try {
+      const webhookId = webhookMatch[1];
+      const webhookDataStr = webhookMatch[2] || '{}';
+      
+      // Parse JSON data
+      const jsonStr = webhookDataStr
+        .replace(/'/g, '"')
+        .replace(/(\w+):/g, '"$1":');
+      
+      const webhookData = JSON.parse(jsonStr);
+      
+      return {
+        webhook: webhookId,
+        data: webhookData
+      };
+    } catch (parseError) {
+      console.error('Error parsing webhook data:', parseError);
+    }
+  }
+  
+  // New intent parsing logic
+  const intentMatch = functionCallText.match(/__execute_intent\(['"]([^'"]+)['"](?:,\s*([\d\.]+))?\)/);
+  if (intentMatch) {
+    return {
+      intent: intentMatch[1],
+      confidence: parseFloat(intentMatch[2] || '1.0')
+    };
+  }
+  
+  return null;
+}
+
+/**
+ * Generate a system prompt for intent detection
+ * @returns {string} - Intent detection system prompt
+ */
+function generateIntentPrompt() {
+  // Get all available commands and their help text for more accurate intent detection
+  const availableCommands = Array.from(commandHandler.commands.keys())
+    .map(cmd => {
+      const helpIndex = commandHandler.helpMessages.findIndex(help => help.startsWith(cmd));
+      const helpText = helpIndex >= 0 ? commandHandler.helpMessages[helpIndex] : cmd;
+      return helpText;
+    });
+  
+  // Get all available webhooks and their descriptions
+  const availableWebhooks = webhookHandler.getWebhooksInfo()
+    .map(webhook => `${webhook.name}: ${webhook.description}`);
+
+  return `
+You are an intent classifier for a WhatsApp bot. Your job is to analyze user messages and determine
+if they are requesting one of the following intents:
+
+1. CHAT: The user is asking a general question or having a conversation
+2. COMMAND: The user wants to execute a specific command
+3. WEBHOOK: The user wants to control a device or service via webhook
+
+AVAILABLE COMMANDS:
+${availableCommands.join('\n')}
+
+AVAILABLE WEBHOOKS:
+${availableWebhooks.join('\n')}
+
+Examine the user's message and classify the intent based on:
+- If it matches or is similar to any of the available commands -> COMMAND
+- If it appears to be requesting control of a device or service -> WEBHOOK
+- If it's a general question or conversation -> CHAT
+
+Respond only with the intent classification using this format:
+__execute_intent("INTENT_TYPE", CONFIDENCE_SCORE)
+
+Where:
+- INTENT_TYPE is one of: CHAT, COMMAND, or WEBHOOK
+- CONFIDENCE_SCORE is a number between 0.0 and 1.0
+
+Examples:
+- "What's the weather like in Madrid?" -> __execute_intent("COMMAND", 0.9)
+- "Tell me about quantum physics" -> __execute_intent("CHAT", 0.95)
+- "Turn off the lights in the office" -> __execute_intent("WEBHOOK", 0.8)
+- "Hello, how are you?" -> __execute_intent("CHAT", 0.9)
+`;
+}
+
+/**
  * Handle chatbot messages and process potential function calls
  * @param {object} msg - WhatsApp message object
  * @param {string} text - User's message text
@@ -224,259 +697,303 @@ async function handleChatbotMessage(msg, text) {
   console.log('Processing chatbot message:', text);
   
   try {
-    // Get the system prompt with available commands and webhooks
-    const systemPrompt = generateSystemPrompt();
+    // Step 1: Detect the user's intent using a small model
+    console.log('Step 1: Detecting user intent...');
+    const intentPrompt = generateIntentPrompt();
+    let detectedIntent = 'CHAT'; // Default to chat if intent detection fails
     
-    let aiResponse;
-    let nativeFunctionCall = null;
+    try {
+      // Intent detection function for OpenAI
+      const intentFunctions = [
+        {
+          name: "detect_intent",
+          description: "Detect the user's intent from their message",
+          parameters: {
+            type: "object",
+            properties: {
+              intent: {
+                type: "string",
+                enum: ["CHAT", "COMMAND", "WEBHOOK"],
+                description: "The detected intent type",
+              },
+              confidence: {
+                type: "number",
+                description: "Confidence score between 0 and 1",
+              },
+              reason: {
+                type: "string",
+                description: "Reason for the intent classification",
+              }
+            },
+            required: ["intent"],
+          },
+        }
+      ];
+      
+      const intentResponse = await callAIModel(
+        CONFIG.INTENT_AI_PROVIDER,
+        CONFIG.INTENT_AI_MODEL,
+        intentPrompt,
+        text,
+        { 
+          purpose: 'intent', 
+          temperature: 0.3, 
+          maxTokens: 100,
+          functions: CONFIG.INTENT_AI_PROVIDER.toLowerCase() === 'openai' ? intentFunctions : undefined
+        }
+      );
+      
+      if (intentResponse.functionCall && intentResponse.functionCall.intent) {
+        detectedIntent = intentResponse.functionCall.intent;
+        const confidence = intentResponse.functionCall.confidence || 'N/A';
+        const reason = intentResponse.functionCall.reason || 'No reason provided';
+        console.log(`Intent detected: ${detectedIntent} with confidence ${confidence}`);
+        console.log(`Reason: ${reason}`);
+      } else {
+        // Try to parse intent from text response as fallback
+        const intentRegex = /__execute_intent\(['"]([A-Z]+)['"]/;
+        const match = intentResponse.text.match(intentRegex);
+        if (match && ['CHAT', 'COMMAND', 'WEBHOOK'].includes(match[1])) {
+          detectedIntent = match[1];
+          console.log(`Intent parsed from text: ${detectedIntent}`);
+        } else {
+          console.log('Could not detect intent from model response, defaulting to CHAT');
+        }
+      }
+    } catch (intentError) {
+      console.error('Error detecting intent:', intentError);
+      console.log('Defaulting to CHAT intent due to error');
+    }
     
-    // Choose which AI provider to use
-    if (CONFIG.AI_PROVIDER.toLowerCase() === 'openai' && OpenAI && CONFIG.OPENAI_API_KEY) {
-      console.log('Using OpenAI API for chat response');
+    // Step 2: Process the message based on the detected intent
+    let aiResponse = null;
+    let functionCall = null;
+    
+    // Functions definition for OpenAI function calling
+    const functions = [
+      {
+        name: "execute_command",
+        description: "Execute a WhatsApp bot command",
+        parameters: {
+          type: "object",
+          properties: {
+            command: {
+              type: "string",
+              description: "The command to execute, including the ! prefix",
+            },
+            args: {
+              type: "string",
+              description: "The arguments to pass to the command",
+            },
+          },
+          required: ["command"],
+        },
+      },
+      {
+        name: "execute_webhook",
+        description: "Execute a webhook to control Home Assistant",
+        parameters: {
+          type: "object",
+          properties: {
+            webhook: {
+              type: "string",
+              description: "The webhook name to execute (internal name, e.g. area_control)",
+            },
+            data: {
+              type: "object",
+              description: "The data to send to the webhook",
+            },
+          },
+          required: ["webhook", "data"],
+        },
+      },
+      {
+        name: "detect_intent",
+        description: "Detect the user's intent from their message",
+        parameters: {
+          type: "object",
+          properties: {
+            intent: {
+              type: "string",
+              enum: ["CHAT", "COMMAND", "WEBHOOK"],
+              description: "The detected intent type",
+            },
+            confidence: {
+              type: "number",
+              description: "Confidence score between 0 and 1",
+            },
+            reason: {
+              type: "string",
+              description: "Reason for the intent classification",
+            }
+          },
+          required: ["intent"],
+        },
+      },
+    ];
+    
+    if (detectedIntent === 'CHAT') {
+      // For chat intent, use the chat model
+      console.log('Step 2: Processing as CHAT using chat model');
+      const chatSystemPrompt = `You are a helpful, friendly WhatsApp assistant. 
+Respond concisely, clearly, and in a friendly tone. 
+Avoid suggesting actions that would require executing commands or webhooks.`;
       
       try {
-        // Initialize OpenAI client
-        const openaiOptions = {
-          apiKey: CONFIG.OPENAI_API_KEY,
-        };
+        const chatResponse = await callAIModel(
+          CONFIG.CHAT_AI_PROVIDER,
+          CONFIG.CHAT_AI_MODEL,
+          chatSystemPrompt,
+          text,
+          { purpose: 'chat', temperature: 0.7 }
+        );
         
-        if (CONFIG.OPENAI_ORG_ID) {
-          openaiOptions.organization = CONFIG.OPENAI_ORG_ID;
-        }
-        
-        const openai = new OpenAI(openaiOptions);
-        
-        // Define available functions for OpenAI
-        const functions = [
-          {
-            name: "execute_command",
-            description: "Execute a WhatsApp bot command",
-            parameters: {
-              type: "object",
-              properties: {
-                command: {
-                  type: "string",
-                  description: "The command to execute, including the ! prefix",
-                },
-                args: {
-                  type: "string",
-                  description: "The arguments to pass to the command",
-                },
-              },
-              required: ["command"],
-            },
-          },
-          {
-            name: "execute_webhook",
-            description: "Execute a webhook to control Home Assistant",
-            parameters: {
-              type: "object",
-              properties: {
-                webhook: {
-                  type: "string",
-                  description: "The webhook name to execute (internal name, e.g. area_control)",
-                },
-                data: {
-                  type: "object",
-                  description: "The data to send to the webhook",
-                },
-              },
-              required: ["webhook", "data"],
-            },
-          },
-        ];
-        
-        // Call OpenAI API with function calling
-        const completion = await openai.chat.completions.create({
-          model: CONFIG.OPENAI_MODEL,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: text }
-          ],
-          tools: functions.map(func => ({ type: "function", function: func })),
-          temperature: 0.7,
-          max_tokens: 800,
-        });
-        
-        const responseMessage = completion.choices[0]?.message;
-        
-        // Check if the model wants to call a function
-        if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-          const toolCall = responseMessage.tool_calls[0];
-          
-          if (toolCall.function) {
-            const functionName = toolCall.function.name;
-            const functionArgs = JSON.parse(toolCall.function.arguments);
-            
-            console.log(`OpenAI requested function call: ${functionName}`, functionArgs);
-            
-            // Convert to our internal function call format
-            if (functionName === 'execute_command') {
-              nativeFunctionCall = {
-                command: functionArgs.command,
-                args: functionArgs.args || '',
-              };
-            } else if (functionName === 'execute_webhook') {
-              nativeFunctionCall = {
-                webhook: functionArgs.webhook,
-                data: functionArgs.data || {},
-              };
-            }
-            
-            // Get the response text without function call
-            aiResponse = responseMessage.content || '';
-          } else {
-            aiResponse = responseMessage.content || 'No recibí respuesta clara del modelo de IA.';
-          }
-        } else {
-          aiResponse = responseMessage.content || 'No recibí respuesta clara del modelo de IA.';
-        }
-      } catch (openaiError) {
-        console.error('Error using OpenAI API:', openaiError);
-        // Fall back to Ollama if OpenAI fails
-        aiResponse = await getOllamaResponse(systemPrompt, text);
+        aiResponse = chatResponse.text;
+      } catch (chatError) {
+        console.error('Error getting chat response:', chatError);
+        aiResponse = 'Lo siento, tuve un problema generando una respuesta. Por favor intenta de nuevo.';
       }
     } else {
-      // Use Ollama API
-      aiResponse = await getOllamaResponse(systemPrompt, text);
-    }
-    
-    console.log('AI response received:', aiResponse.substring(0, 100) + '...');
-    
-    /**
-     * Helper function to get response from Ollama
-     * @param {string} systemPrompt - The system prompt
-     * @param {string} userMessage - The user's message
-     * @returns {Promise<string>} - The AI response
-     */
-    async function getOllamaResponse(systemPrompt, userMessage) {
-      console.log('Using Ollama API for chat response');
-      const data = await safeApiRequest(`${CONFIG.OLLAMA_API_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: CONFIG.OLLAMA_MODEL,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userMessage }
-          ],
-          stream: false
-        })
-      }, 120000); // 120 second timeout
+      // For command or webhook intents, use the function model
+      console.log(`Step 2: Processing as ${detectedIntent} using function model`);
+      const systemPrompt = generateSystemPrompt(); // Get full prompt with commands and webhooks
       
-      return data.message?.content || data.response || 'No recibí respuesta clara del modelo de IA.';
-    }
-    
-    // For OpenAI, we might already have a native function call
-    let functionCall = nativeFunctionCall;
-    let responseToUser = aiResponse;
-    
-    // For Ollama or text-based function calls, parse them from the response text
-    if (!functionCall) {
-      // Check if the response contains a text-based function call
-      const functionCallRegex = /__execute_(?:command|webhook)\([^)]+\)/;
-      const functionCallMatch = aiResponse.match(functionCallRegex);
-      
-      if (functionCallMatch) {
-        functionCall = parseFunctionCall(functionCallMatch[0]);
-        console.log('Detected function call:', functionCall);
+      try {
+        const functionResponse = await callAIModel(
+          CONFIG.FUNCTION_AI_PROVIDER,
+          CONFIG.FUNCTION_AI_MODEL,
+          systemPrompt,
+          text,
+          { purpose: 'function', functions: functions }
+        );
         
-        // Remove the function call from the response
-        responseToUser = aiResponse.replace(functionCallRegex, '').trim();
+        aiResponse = functionResponse.text;
+        functionCall = functionResponse.functionCall;
         
-        // Clean up any double spaces or newlines that might be left
-        responseToUser = responseToUser
-          .replace(/\s+/g, ' ')
-          .replace(/\n\s*\n\s*\n/g, '\n\n')
-          .trim();
+        // If no function call was detected but we're in COMMAND/WEBHOOK intent,
+        // check for text-based function calls
+        if (!functionCall) {
+          const functionCallRegex = /__execute_(?:command|webhook)\([^)]+\)/;
+          const functionCallMatch = aiResponse.match(functionCallRegex);
+          
+          if (functionCallMatch) {
+            functionCall = parseFunctionCallText(functionCallMatch[0]);
+            console.log('Detected text-based function call:', functionCall);
+            
+            // Remove the function call from the response
+            aiResponse = aiResponse.replace(functionCallRegex, '').trim();
+            
+            // Clean up any double spaces or newlines that might be left
+            aiResponse = aiResponse
+              .replace(/\s+/g, ' ')
+              .replace(/\n\s*\n\s*\n/g, '\n\n')
+              .trim();
+          } else if (detectedIntent === 'COMMAND' || detectedIntent === 'WEBHOOK') {
+            console.log('Intent was for command/webhook but no function call detected');
+          }
+        }
+      } catch (functionError) {
+        console.error('Error getting function response:', functionError);
+        aiResponse = 'Lo siento, tuve un problema procesando tu petición. Por favor intenta de nuevo.';
       }
     }
     
-    // If function calls are disabled, inform the user
+    console.log('AI response received:', (aiResponse || '').substring(0, 100) + '...');
+    const responseToUser = aiResponse;
+    
+    // If function calls are disabled but we detected a function call, inform the user
     if (!areFunctionCallsEnabled() && functionCall) {
       // Add a note about the disabled function
       let actionType = functionCall.command ? 'comando' : 'acción';
       let actionName = functionCall.command || functionCall.webhook || 'desconocida';
       
       responseToUser += `\n\n_La ejecución automática de ${actionType}s está desactivada. Usa !settings funciones on para activarla._`;
-    }
-    
-    // Execute the command if found
-    if (functionCall.command && commandHandler.commands.has(functionCall.command)) {
-      const handler = commandHandler.commands.get(functionCall.command);
-      console.log(`Executing command: ${functionCall.command} with args: ${functionCall.args}`);
       
-      // Log the function call
-      await logFunctionCall('command', {
-        command: functionCall.command,
-        args: functionCall.args,
-        userMessage: text
-      });
-      
-      // If we have a response to send before executing the command
-      if (responseToUser) {
-        await msg.reply(responseToUser);
-      }
-      
-      // Execute the command
-      await handler(msg, functionCall.args);
-      return; // Command handler will send the response
-    }
-    
-    // Execute the webhook if found
-    if (functionCall.webhook) {
-      console.log(`Executing webhook: ${functionCall.webhook} with data:`, functionCall.data);
-      
-      // Find the webhook by name or ID
-      const webhookInfo = webhookHandler.findWebhook(functionCall.webhook);
-      
-      if (!webhookInfo) {
-        await msg.reply(`❌ No encontré el webhook "${functionCall.webhook}". Por favor verifica el nombre.`);
-        return;
-      }
-      
-      // Log the function call
-      await logFunctionCall('webhook', {
-        webhook: webhookInfo.name,
-        externalId: webhookInfo.externalId,
-        data: functionCall.data,
-        userMessage: text
-      });
-      
-      // Log the webhook mapping for debugging
-      console.log(`Webhook mapping: internal name [${webhookInfo.name}] -> external ID [${webhookInfo.externalId}]`);
-      
-      // If we have a response to send before executing the webhook
-      if (responseToUser) {
-        await msg.reply(responseToUser);
-      }
-      
-      // Execute the webhook using the internal name (which the handler will find)
-      const result = await webhookHandler.handleWebhook(webhookInfo.name, functionCall.data);
-      
-      if (result.error) {
-        await msg.reply(`❌ No pude completar la acción: ${result.message}`);
-      } else {
-        // Format the result in a user-friendly way
-        let successMessage = '✅ Acción completada con éxito';
-        
-        // Add specific details based on the webhook type
-        if (functionCall.webhook === 'area_control') {
-          const area = functionCall.data.area || 'área';
-          const turn = functionCall.data.turn || 'estado';
-          successMessage = `✅ He ${turn === 'on' ? 'encendido' : 'apagado'} las luces del ${area}`;
-        } else if (functionCall.webhook === 'send_notification') {
-          successMessage = `✅ Mensaje enviado correctamente`;
-        } else if (result.message) {
-          successMessage = `✅ ${result.message}`;
-        }
-        
-        await msg.reply(successMessage);
-      }
+      // Just send the message with the warning and don't execute the function
+      await msg.reply(responseToUser);
       return;
     }
     
-    // If no function call was executed, just send the AI response
+    // Step 3: Execute the function call if present
+    if (functionCall) {
+      // Execute the command if found
+      if (functionCall.command && commandHandler.commands.has(functionCall.command)) {
+        const handler = commandHandler.commands.get(functionCall.command);
+        console.log(`Step 3: Executing command: ${functionCall.command} with args: ${functionCall.args}`);
+        
+        // Log the function call
+        await logFunctionCall('command', {
+          command: functionCall.command,
+          args: functionCall.args,
+          userMessage: text
+        });
+        
+        // If we have a response to send before executing the command
+        if (responseToUser) {
+          await msg.reply(responseToUser);
+        }
+        
+        // Execute the command
+        await handler(msg, functionCall.args);
+        return; // Command handler will send the response
+      }
+      
+      // Execute the webhook if found
+      if (functionCall.webhook) {
+        console.log(`Step 3: Executing webhook: ${functionCall.webhook} with data:`, functionCall.data);
+        
+        // Find the webhook by name or ID
+        const webhookInfo = webhookHandler.findWebhook(functionCall.webhook);
+        
+        if (!webhookInfo) {
+          await msg.reply(`❌ No encontré el webhook "${functionCall.webhook}". Por favor verifica el nombre.`);
+          return;
+        }
+        
+        // Log the function call
+        await logFunctionCall('webhook', {
+          webhook: webhookInfo.name,
+          externalId: webhookInfo.externalId,
+          data: functionCall.data,
+          userMessage: text
+        });
+        
+        // Log the webhook mapping for debugging
+        console.log(`Webhook mapping: internal name [${webhookInfo.name}] -> external ID [${webhookInfo.externalId}]`);
+        
+        // If we have a response to send before executing the webhook
+        if (responseToUser) {
+          await msg.reply(responseToUser);
+        }
+        
+        // Execute the webhook using the internal name (which the handler will find)
+        const result = await webhookHandler.handleWebhook(webhookInfo.name, functionCall.data);
+        
+        if (result.error) {
+          await msg.reply(`❌ No pude completar la acción: ${result.message}`);
+        } else {
+          // Format the result in a user-friendly way
+          let successMessage = '✅ Acción completada con éxito';
+          
+          // Add specific details based on the webhook type
+          if (functionCall.webhook === 'area_control') {
+            const area = functionCall.data.area || 'área';
+            const turn = functionCall.data.turn || 'estado';
+            successMessage = `✅ He ${turn === 'on' ? 'encendido' : 'apagado'} las luces del ${area}`;
+          } else if (functionCall.webhook === 'send_notification') {
+            successMessage = `✅ Mensaje enviado correctamente`;
+          } else if (result.message) {
+            successMessage = `✅ ${result.message}`;
+          }
+          
+          await msg.reply(successMessage);
+        }
+        return;
+      }
+    }
+    
+    // If no function call was executed or it was a chat intent, just send the AI response
+    console.log('Step 3: No function to execute, sending chat response');
     await msg.reply(responseToUser);
     
   } catch (error) {

@@ -10,17 +10,24 @@ const qrcodeTerminal = require('qrcode-terminal');
 
 // Environment variables with defaults
 const CONFIG = {
-  // AI provider configuration
-  AI_PROVIDER: process.env.AI_PROVIDER || 'ollama',
-  
-  // Ollama configuration
+  // API Connection Settings
   OLLAMA_API_URL: process.env.OLLAMA_API_URL || 'http://localhost:11434',
-  OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'mi-bot',
-  
-  // OpenAI configuration
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
-  OPENAI_MODEL: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
   OPENAI_ORG_ID: process.env.OPENAI_ORG_ID || '',
+  
+  // Default AI Provider and Model
+  DEFAULT_AI_PROVIDER: process.env.DEFAULT_AI_PROVIDER || 'ollama',
+  DEFAULT_AI_MODEL: process.env.DEFAULT_AI_MODEL || 'mi-bot',
+  
+  // Multi-model configuration
+  INTENT_AI_PROVIDER: process.env.INTENT_AI_PROVIDER || process.env.DEFAULT_AI_PROVIDER || 'ollama',
+  INTENT_AI_MODEL: process.env.INTENT_AI_MODEL || process.env.DEFAULT_AI_MODEL || 'mi-bot',
+  
+  CHAT_AI_PROVIDER: process.env.CHAT_AI_PROVIDER || process.env.DEFAULT_AI_PROVIDER || 'ollama',
+  CHAT_AI_MODEL: process.env.CHAT_AI_MODEL || process.env.DEFAULT_AI_MODEL || 'mi-bot',
+  
+  FUNCTION_AI_PROVIDER: process.env.FUNCTION_AI_PROVIDER || process.env.DEFAULT_AI_PROVIDER || 'ollama',
+  FUNCTION_AI_MODEL: process.env.FUNCTION_AI_MODEL || process.env.DEFAULT_AI_MODEL || 'mi-bot',
   
   // Server configuration
   PORT: parseInt(process.env.PORT || '3000', 10),

@@ -79,21 +79,33 @@ commandFiles.forEach(file => {
     
     // Check for specific dependencies
     if (file === 'aiCommand.js' || file === 'chatbotCommand.js') {
-      const aiProvider = process.env.AI_PROVIDER?.toLowerCase() || 'ollama';
+      // Get the default provider for checking
+      const defaultProvider = process.env.DEFAULT_AI_PROVIDER?.toLowerCase() || 'ollama';
       
-      if (aiProvider === 'ollama') {
-        if (!isEnvSet('OLLAMA_API_URL') || !isEnvSet('OLLAMA_MODEL')) {
-          dependencies.push('Missing OLLAMA_* env vars');
-          status = chalk.yellow('⚠ Check Ollama config');
-        }
-      } else if (aiProvider === 'openai') {
-        if (!isEnvSet('OPENAI_API_KEY')) {
-          dependencies.push('Missing OPENAI_API_KEY');
-          status = chalk.yellow('⚠ Check OpenAI config');
-        }
-      } else {
-        dependencies.push(`Unknown AI provider: ${aiProvider}`);
-        status = chalk.yellow('⚠ Check AI_PROVIDER value');
+      // Check all potential providers that might be used
+      const providers = new Set([
+        defaultProvider,
+        process.env.INTENT_AI_PROVIDER?.toLowerCase() || defaultProvider,
+        process.env.CHAT_AI_PROVIDER?.toLowerCase() || defaultProvider,
+        process.env.FUNCTION_AI_PROVIDER?.toLowerCase() || defaultProvider
+      ]);
+      
+      // Check dependencies for each configured provider
+      if (providers.has('ollama') && !isEnvSet('OLLAMA_API_URL')) {
+        dependencies.push('Missing OLLAMA_API_URL');
+        status = chalk.yellow('⚠ Check Ollama config');
+      }
+      
+      if (providers.has('openai') && !isEnvSet('OPENAI_API_KEY')) {
+        dependencies.push('Missing OPENAI_API_KEY');
+        status = chalk.yellow('⚠ Check OpenAI config');
+      }
+      
+      // Check if any unknown providers are configured
+      const unknownProviders = [...providers].filter(p => !['ollama', 'openai'].includes(p));
+      if (unknownProviders.length > 0) {
+        dependencies.push(`Unknown provider(s): ${unknownProviders.join(', ')}`);
+        status = chalk.yellow('⚠ Check AI provider settings');
       }
     }
     
@@ -137,15 +149,27 @@ console.log('-'.repeat(80));
 
 // Check environment variables
 const envVars = [
-  { name: 'AI_PROVIDER', description: 'AI provider to use', default: 'ollama' },
+  // Default AI Provider and Model
+  { name: 'DEFAULT_AI_PROVIDER', description: 'Default AI provider to use', default: 'ollama' },
+  { name: 'DEFAULT_AI_MODEL', description: 'Default AI model name', default: 'mi-bot' },
+  
+  // Intent Detection Model
+  { name: 'INTENT_AI_PROVIDER', description: 'AI provider for intent detection', default: 'DEFAULT_AI_PROVIDER' },
+  { name: 'INTENT_AI_MODEL', description: 'Model for intent detection', default: 'DEFAULT_AI_MODEL' },
+  
+  // Chat Model
+  { name: 'CHAT_AI_PROVIDER', description: 'AI provider for chat conversations', default: 'DEFAULT_AI_PROVIDER' },
+  { name: 'CHAT_AI_MODEL', description: 'Model for chat conversations', default: 'DEFAULT_AI_MODEL' },
+  
+  // Function Model
+  { name: 'FUNCTION_AI_PROVIDER', description: 'AI provider for function execution', default: 'DEFAULT_AI_PROVIDER' },
+  { name: 'FUNCTION_AI_MODEL', description: 'Model for function execution', default: 'DEFAULT_AI_MODEL' },
   
   // Ollama settings
   { name: 'OLLAMA_API_URL', description: 'Ollama API URL', default: 'http://localhost:11434' },
-  { name: 'OLLAMA_MODEL', description: 'Ollama model name', default: 'mi-bot' },
   
   // OpenAI settings
   { name: 'OPENAI_API_KEY', description: 'OpenAI API key', default: '' },
-  { name: 'OPENAI_MODEL', description: 'OpenAI model name', default: 'gpt-3.5-turbo' },
   { name: 'OPENAI_ORG_ID', description: 'OpenAI Organization ID', default: '' },
   { name: 'HOMEASSISTANT_URL', description: 'Home Assistant URL', default: 'http://localhost:8123' },
   { name: 'AREA_CONTROL_WEBHOOK_ID', description: 'Home Assistant area control webhook ID', default: 'area_control' },

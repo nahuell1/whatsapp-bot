@@ -95,12 +95,21 @@ The bot supports multiple commands:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| AI_PROVIDER | AI provider to use ('ollama' or 'openai') | ollama |
+| **API Connection Settings** | | |
 | OLLAMA_API_URL | URL of the Ollama API | http://localhost:11434 |
-| OLLAMA_MODEL | Name of the Ollama model to use | mi-bot |
-| OPENAI_API_KEY | OpenAI API key for using OpenAI | (empty) |
-| OPENAI_MODEL | OpenAI model to use | gpt-3.5-turbo |
+| OPENAI_API_KEY | OpenAI API key | (empty) |
 | OPENAI_ORG_ID | OpenAI organization ID (optional) | (empty) |
+| **AI Model Configuration** | | |
+| DEFAULT_AI_PROVIDER | Default AI provider ('ollama' or 'openai') | ollama |
+| DEFAULT_AI_MODEL | Default model name to use | mi-bot |
+| INTENT_AI_PROVIDER | Provider for intent detection | DEFAULT_AI_PROVIDER |
+| INTENT_AI_MODEL | Model for intent detection | DEFAULT_AI_MODEL |
+| CHAT_AI_PROVIDER | Provider for chat conversations | DEFAULT_AI_PROVIDER |
+| CHAT_AI_MODEL | Model for chat conversations | DEFAULT_AI_MODEL |
+| FUNCTION_AI_PROVIDER | Provider for command/webhook execution | DEFAULT_AI_PROVIDER |
+| FUNCTION_AI_MODEL | Model for command/webhook execution | DEFAULT_AI_MODEL |
+
+> For detailed information about the multi-model configuration, see [MULTI_MODEL_CONFIGURATION.md](MULTI_MODEL_CONFIGURATION.md)
 | PORT | Port for the web server | 3000 |
 | COMMAND_PREFIX | Command prefix for AI commands | !ia |
 | SESSION_DIR | Directory for storing session data | ./session |

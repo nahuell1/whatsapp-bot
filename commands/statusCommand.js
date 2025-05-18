@@ -8,17 +8,27 @@ const fetch = require('node-fetch');
 // Store reference to the WhatsApp client
 let whatsappClient = null;
 
-// Configuration from environment variables
+// Configuration from environment variables with multi-model support
 const CONFIG = {
-  // AI provider
-  AI_PROVIDER: process.env.AI_PROVIDER || 'ollama',
-  
-  // Ollama
+  // API URLs and Authentication
   OLLAMA_API_URL: process.env.OLLAMA_API_URL || 'http://localhost:11434',
-  OLLAMA_MODEL: process.env.OLLAMA_MODEL || 'mi-bot',
-  
-  // OpenAI
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+  
+  // Default provider and model (used if specific ones not set)
+  DEFAULT_AI_PROVIDER: process.env.DEFAULT_AI_PROVIDER || 'ollama', 
+  DEFAULT_AI_MODEL: process.env.DEFAULT_AI_MODEL || 'mi-bot',
+  
+  // Intent detection model
+  INTENT_AI_PROVIDER: process.env.INTENT_AI_PROVIDER || process.env.DEFAULT_AI_PROVIDER || 'ollama',
+  INTENT_AI_MODEL: process.env.INTENT_AI_MODEL || process.env.DEFAULT_AI_MODEL || 'mi-bot',
+  
+  // Chat model
+  CHAT_AI_PROVIDER: process.env.CHAT_AI_PROVIDER || process.env.DEFAULT_AI_PROVIDER || 'ollama',
+  CHAT_AI_MODEL: process.env.CHAT_AI_MODEL || process.env.DEFAULT_AI_MODEL || 'mi-bot',
+  
+  // Function model
+  FUNCTION_AI_PROVIDER: process.env.FUNCTION_AI_PROVIDER || process.env.DEFAULT_AI_PROVIDER || 'ollama',
+  FUNCTION_AI_MODEL: process.env.FUNCTION_AI_MODEL || process.env.DEFAULT_AI_MODEL || 'mi-bot',
   
   // Home Assistant
   HOMEASSISTANT_URL: process.env.HOMEASSISTANT_URL || 'http://localhost:8123'
@@ -216,16 +226,16 @@ async function handleStatusCommand(msg) {
   // AI Provider Status
   statusMessage += `AI Provider: ${CONFIG.AI_PROVIDER.toUpperCase()}\n`;
   
-  // Check appropriate AI service
-  if (CONFIG.AI_PROVIDER.toLowerCase() === 'openai') {
-    const hasOpenAIKey = !!CONFIG.OPENAI_API_KEY;
-    statusMessage += `OpenAI API: ${hasOpenAIKey ? '✅ Key Configured' : '❌ No API Key'}\n`;
-    statusMessage += `OpenAI Model: ${process.env.OPENAI_MODEL || 'gpt-3.5-turbo'}\n`;
-  } else {
-    // Default to Ollama
-    const ollamaAvailable = await checkServiceAvailable(CONFIG.OLLAMA_API_URL, 'Ollama');
-    statusMessage += `Ollama API: ${ollamaAvailable ? '✅ Online' : '❌ Offline'}\n`;
-    statusMessage += `Ollama Model: ${CONFIG.OLLAMA_MODEL}\n`;
+  // Check all AI services in the multi-model configuration
+  const aiProviders = ['DEFAULT', 'INTENT', 'CHAT', 'FUNCTION'];
+  for (const provider of aiProviders) {
+    const providerName = provider === 'DEFAULT' ? 'Ollama' : `${provider} (${CONFIG[`${provider}_AI_PROVIDER`].toUpperCase()})`;
+    const modelName = CONFIG[`${provider}_AI_MODEL`];
+    
+    // Check availability of the service
+    const isAvailable = await checkServiceAvailable(CONFIG[`${provider}_API_URL`], providerName);
+    statusMessage += `${providerName} API: ${isAvailable ? '✅ Online' : '❌ Offline'}\n`;
+    statusMessage += `Model: ${modelName}\n`;
   }
   
   // Check Home Assistant - use our more reliable method

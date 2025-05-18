@@ -9,17 +9,26 @@ services:
     extra_hosts:
       - "homeassistant.local:192.168.1.100"  # Reemplaza con la IP real de tu Home Assistant
     environment:
-      # AI Provider Configuration
-      - AI_PROVIDER=${AI_PROVIDER:-ollama}
-      
-      # Ollama Configuration
+      # API Connection Settings
       - OLLAMA_API_URL=${OLLAMA_API_URL:-http://localhost:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-mi-bot}
-      
-      # OpenAI Configuration
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-3.5-turbo}
       - OPENAI_ORG_ID=${OPENAI_ORG_ID}
+      
+      # Default AI Provider and Model
+      - DEFAULT_AI_PROVIDER=${DEFAULT_AI_PROVIDER:-ollama}
+      - DEFAULT_AI_MODEL=${DEFAULT_AI_MODEL:-mi-bot}
+      
+      # Intent Detection Model
+      - INTENT_AI_PROVIDER=${INTENT_AI_PROVIDER:-${DEFAULT_AI_PROVIDER:-ollama}}
+      - INTENT_AI_MODEL=${INTENT_AI_MODEL:-${DEFAULT_AI_MODEL:-mi-bot}}
+      
+      # Chat Model (for conversations)
+      - CHAT_AI_PROVIDER=${CHAT_AI_PROVIDER:-${DEFAULT_AI_PROVIDER:-ollama}}
+      - CHAT_AI_MODEL=${CHAT_AI_MODEL:-${DEFAULT_AI_MODEL:-mi-bot}}
+      
+      # Function Model (for commands/webhooks)
+      - FUNCTION_AI_PROVIDER=${FUNCTION_AI_PROVIDER:-${DEFAULT_AI_PROVIDER:-ollama}}
+      - FUNCTION_AI_MODEL=${FUNCTION_AI_MODEL:-${DEFAULT_AI_MODEL:-mi-bot}}
       
       # Bot Configuration
       - PORT=${PORT:-3000}
