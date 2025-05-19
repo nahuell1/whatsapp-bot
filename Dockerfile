@@ -1,8 +1,11 @@
 FROM node:20-slim
 
-# Install Chromium and dependencies
-RUN apt-get update && apt-get install -y \
+# Install Chromium, networking tools, and dependencies
+RUN apt-get update && apt-get install -y ffmpeg \
     chromium \
+    curl \
+    iputils-ping \
+    netcat-openbsd \
     libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 \
     libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
     libgtk-3-0 libnss3 xdg-utils \
@@ -25,8 +28,8 @@ RUN npm install
 # Copy the rest of the application
 COPY . .
 
-# Create and set permissions for session directory
-RUN mkdir -p /app/session && chown -R whatsapp:whatsapp /app
+# Create and set permissions for session and data directories
+RUN mkdir -p /app/session /app/data/temp && chown -R whatsapp:whatsapp /app
 
 # Switch to non-root user
 USER whatsapp

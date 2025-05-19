@@ -54,10 +54,24 @@ The bot supports multiple commands:
 
 - **Home Assistant Control**:
   ```
+  Control Home Assistant areas through the configured webhook.
+
+- **Camera Snapshot**:
+  ```
+  Take a snapshot from the configured camera and send it as a WhatsApp message.
+
+- **Home Assistant Control**:
+  ```
   !area office on
   !area room off
   ```
   Control Home Assistant areas through the configured webhook.
+
+- **Camera Snapshot**:
+  ```
+  !camera
+  ```
+  Take a snapshot from the configured camera and send it as a WhatsApp message.
 
 ### Weather Information
 

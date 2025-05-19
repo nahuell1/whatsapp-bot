@@ -47,7 +47,25 @@ Para controlar áreas de tu casa inteligente:
 !area room off     (apaga las luces de la habitación)
 ```
 
-#### 5. Suscribirte a notificaciones
+#### 5. Obtener imágenes de cámaras
+Para tomar una captura de la cámara y recibirla por WhatsApp:
+```
+!camera           (toma una captura de la cámara predeterminada)
+```
+Para controlar áreas de tu casa inteligente:
+```
+!area office on    (enciende las luces de la oficina)
+!area room off     (apaga las luces de la habitación)
+```
+
+#### 5. Obtener imágenes de cámaras
+Para tomar una captura de la cámara y recibirla por WhatsApp:
+```
+!camera           (toma una captura de la cámara predeterminada)
+!camera cocina    (toma una captura de una cámara específica)
+```
+
+#### 6. Suscribirte a notificaciones
 Para recibir alertas sobre diferentes temas:
 ```
 !suscribir list               (ver tus suscripciones)
