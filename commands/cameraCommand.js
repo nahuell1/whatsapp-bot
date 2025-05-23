@@ -2,25 +2,10 @@
  * @module commands/cameraCommand
  * @description Camera snapshot command implementation for the WhatsApp bot
  * 
- * This module provides the !camera command that takes a snapshot from a
- * TAPO C100 camera and sends it to the user via WhatsApp. I                const imageBuffer = Buffer.concat(imageChunks);
-                console.log(`Received ${imageBuffer.length} bytes from HTTP request`);
-                
-                // Verify it's likely an image (check for JPEG/PNG headers)
-                const isJpeg = imageBuffer.length > 2 && 
-                  imageBuffer[0] === 0xFF && 
-                  imageBuffer[1] === 0xD8;
-                  
-                const isPng = imageBuffer.length > 8 &&
-                  imageBuffer[0] === 0x89 && 
-                  imageBuffer[1] === 0x50 &&
-                  imageBuffer[2] === 0x4E &&
-                  imageBuffer[3] === 0x47;
-                  
-                if (!isJpeg && !isPng) {
-                  console.log('Response does not appear to be an image');
-                  return;
-                }and ONVIF protocols to communicate with the camera.
+ * This module provides the !camera command that takes a snapshot from various
+ * camera types (RTSP, ONVIF, MJPEG) and sends it to the user via WhatsApp.
+ * Supports multiple camera configurations and various protocols to communicate
+ * with different IP camera models.
  * 
  * @requires onvif
  * @requires fluent-ffmpeg
@@ -41,10 +26,30 @@ const { spawn } = require('child_process');
  */
 const CONFIG = {
   // Camera settings with default values
-  CAMERA_IP: process.env.CAMERA_IP || '192.168.0.43',
-  CAMERA_PORT: process.env.CAMERA_PORT || '554',
-  CAMERA_USERNAME: process.env.CAMERA_USERNAME || 'admin',
-  CAMERA_PASSWORD: process.env.CAMERA_PASSWORD || '',
+  cameras: {
+    'default': {
+      IP: process.env.CAMERA_IP || '192.168.0.43',
+      PORT: process.env.CAMERA_PORT || '554',
+      USERNAME: process.env.CAMERA_USERNAME || 'admin',
+      PASSWORD: process.env.CAMERA_PASSWORD || '',
+      TYPE: 'rtsp' // Default camera type is RTSP
+    },
+    'camera2': {
+      IP: process.env.CAMERA2_IP || '192.168.0.44',
+      PORT: process.env.CAMERA2_PORT || '554',
+      USERNAME: process.env.CAMERA2_USERNAME || 'admin',
+      PASSWORD: process.env.CAMERA2_PASSWORD || '',
+      TYPE: 'rtsp' // Second camera is also RTSP
+    },
+    'mjpeg': {
+      IP: process.env.CAMERA3_IP || '192.168.0.45',
+      PORT: process.env.CAMERA3_PORT || '80',
+      USERNAME: process.env.CAMERA3_USERNAME || 'admin',
+      PASSWORD: process.env.CAMERA3_PASSWORD || '',
+      PATH: process.env.CAMERA3_PATH || '/video/mjpg/1',
+      TYPE: process.env.CAMERA3_TYPE || 'mjpeg' // Third camera is MJPEG
+    }
+  },
   
   // RTSP URL patterns to try (specific patterns for TAPO C100 cameras)
   RTSP_URL_PATTERNS: [
@@ -109,16 +114,20 @@ async function ensureTempDir() {
  * Format an RTSP URL pattern with camera details
  * 
  * @param {string} pattern - RTSP URL pattern
+ * @param {string} cameraName - Name of the camera configuration to use
  * @returns {string} Formatted RTSP URL
  */
-function formatRtspUrl(pattern) {
+function formatRtspUrl(pattern, cameraName) {
+  // Get the camera config, fallback to default if not found
+  const camera = CONFIG.cameras[cameraName] || CONFIG.cameras['default'];
+  
   // Don't use encodeURIComponent for RTSP URLs as it can make them too long
   // Some cameras have a limit (around 32 characters) for authentication strings
   return pattern
-    .replace('{ip}', CONFIG.CAMERA_IP)
-    .replace('{port}', CONFIG.CAMERA_PORT)
-    .replace('{username}', CONFIG.CAMERA_USERNAME)
-    .replace('{password}', CONFIG.CAMERA_PASSWORD);
+    .replace('{ip}', camera.IP)
+    .replace('{port}', camera.PORT)
+    .replace('{username}', camera.USERNAME)
+    .replace('{password}', camera.PASSWORD);
 }
 
 /**
@@ -193,11 +202,13 @@ function captureFrameWithFFmpeg(rtspUrl, outputPath) {
  * Try to get a snapshot using ONVIF protocol
  * 
  * @param {string} outputPath - Path to save the snapshot
+ * @param {string} cameraName - Name of the camera configuration to use
  * @returns {Promise<boolean>} True if successful, false otherwise
  */
-function getSnapshotWithOnvif(outputPath) {
+function getSnapshotWithOnvif(outputPath, cameraName) {
+  const camera = CONFIG.cameras[cameraName] || CONFIG.cameras['default'];
   return new Promise(async (resolve) => {
-    console.log(`Trying ONVIF connection to camera at ${CONFIG.CAMERA_IP}`);
+    console.log(`Trying ONVIF connection to camera at ${camera.IP}`);
     
     // Common ONVIF ports to try
     const portsToTry = [80, 443, 8000, 8080, 8081, 2020];
@@ -209,9 +220,9 @@ function getSnapshotWithOnvif(outputPath) {
         // Create a promise that can be resolved by either success or timeout
         const connectionResult = await new Promise((resolveConnection) => {
           const cam = new Cam({
-            hostname: CONFIG.CAMERA_IP,
-            username: CONFIG.CAMERA_USERNAME,
-            password: CONFIG.CAMERA_PASSWORD,
+            hostname: camera.IP,
+            username: camera.USERNAME,
+            password: camera.PASSWORD,
             port: port,
             timeout: 5000
           }, (err) => {
@@ -230,11 +241,11 @@ function getSnapshotWithOnvif(outputPath) {
               
               // Format the URI, adding authentication if not included
               let snapshotUrl = result.uri;
-              if (!snapshotUrl.includes('@') && CONFIG.CAMERA_USERNAME) {
+              if (!snapshotUrl.includes('@') && camera.USERNAME) {
                 try {
                   const urlObject = new URL(snapshotUrl);
-                  urlObject.username = CONFIG.CAMERA_USERNAME;
-                  urlObject.password = CONFIG.CAMERA_PASSWORD;
+                  urlObject.username = camera.USERNAME;
+                  urlObject.password = camera.PASSWORD;
                   snapshotUrl = urlObject.toString();
                 } catch (error) {
                   console.error('Error formatting snapshot URL:', error.message);
@@ -280,6 +291,7 @@ function getSnapshotWithOnvif(outputPath) {
  * Many IP cameras support direct HTTP access to snapshots
  * 
  * @param {string} outputPath - Path to save the snapshot
+ * @param {string} cameraName - Name of the camera configuration to use
  * @returns {Promise<boolean>} True if successful, false otherwise
  */
 /**
@@ -287,9 +299,11 @@ function getSnapshotWithOnvif(outputPath) {
  * Many IP cameras support direct HTTP access to snapshots
  * 
  * @param {string} outputPath - Path to save the snapshot
+ * @param {string} cameraName - Name of the camera configuration to use
  * @returns {Promise<boolean>} True if successful, false otherwise
  */
-function getSnapshotWithHttp(outputPath) {
+function getSnapshotWithHttp(outputPath, cameraName) {
+  const camera = CONFIG.cameras[cameraName] || CONFIG.cameras['default'];
   return new Promise(async (resolve) => {
     console.log('Trying HTTP snapshot URLs...');
     
@@ -299,9 +313,9 @@ function getSnapshotWithHttp(outputPath) {
     for (const pattern of CONFIG.HTTP_SNAPSHOT_URLS) {
       try {
         const url = pattern
-          .replace('{ip}', CONFIG.CAMERA_IP)
-          .replace('{username}', encodeURIComponent(CONFIG.CAMERA_USERNAME))
-          .replace('{password}', encodeURIComponent(CONFIG.CAMERA_PASSWORD));
+          .replace('{ip}', camera.IP)
+          .replace('{username}', encodeURIComponent(camera.USERNAME))
+          .replace('{password}', encodeURIComponent(camera.PASSWORD));
         
         console.log(`Trying HTTP snapshot URL: ${url.replace(/:.+?@/, ':***@')}`);
         
@@ -384,24 +398,26 @@ function getSnapshotWithHttp(outputPath) {
  * especially with cameras that have unusual authentication requirements
  * 
  * @param {string} outputPath - Path to save the snapshot
+ * @param {string} cameraName - Name of the camera configuration to use
  * @returns {Promise<boolean>} True if successful, false otherwise
  */
-function getSnapshotWithCurl(outputPath) {
+function getSnapshotWithCurl(outputPath, cameraName) {
+  const camera = CONFIG.cameras[cameraName] || CONFIG.cameras['default'];
   return new Promise(async (resolve) => {
     console.log('Trying curl for snapshot retrieval...');
     
     // HTTPS URLs to try with curl (focusing on confirmed port 443)
     const urlsToTry = [
-    //   `https://${CONFIG.CAMERA_IP}/stw-cgi/snapshot.cgi`,
-    //   `https://${CONFIG.CAMERA_IP}/image/jpeg.cgi`,
-    //   `https://${CONFIG.CAMERA_IP}/cgi-bin/snapshot.cgi`,
-    //   `https://${CONFIG.CAMERA_IP}/snapshot.jpg`,
+    //   `https://${camera.IP}/stw-cgi/snapshot.cgi`,
+    //   `https://${camera.IP}/image/jpeg.cgi`,
+    //   `https://${camera.IP}/cgi-bin/snapshot.cgi`,
+    //   `https://${camera.IP}/snapshot.jpg`,
     ];
     
     // Also try standard RTSP ports
     const rtspUrlsToTry = [
-      `rtsp://${CONFIG.CAMERA_IP}:${CONFIG.CAMERA_PORT}/stream1`,
-      `rtsp://${CONFIG.CAMERA_IP}:${CONFIG.CAMERA_PORT}/stream2`,
+      `rtsp://${camera.IP}:${camera.PORT}/stream1`,
+      `rtsp://${camera.IP}:${camera.PORT}/stream2`,
     ];
     
     // Try HTTPS URLs first
@@ -412,7 +428,7 @@ function getSnapshotWithCurl(outputPath) {
         // Execute curl with various options
         const { exec } = require('child_process');
         
-        const command = `curl -k -s -S --connect-timeout 5 -o "${outputPath}" -u "${CONFIG.CAMERA_USERNAME}:${CONFIG.CAMERA_PASSWORD}" "${url}"`;
+        const command = `curl -k -s -S --connect-timeout 5 -o "${outputPath}" -u "${camera.USERNAME}:${camera.PASSWORD}" "${url}"`;
         
         const curlProcess = exec(command);
         
@@ -512,15 +528,16 @@ function getSnapshotWithCurl(outputPath) {
  * @param {string} outputPath - Path to save the snapshot
  * @returns {Promise<boolean>} True if successful, false otherwise
  */
-function trySimplifiedFfmpeg(outputPath) {
+function trySimplifiedFfmpeg(outputPath, cameraName = 'default') {
+  const camera = CONFIG.cameras[cameraName] || CONFIG.cameras['default'];
   return new Promise(async (resolve) => {
     // First try with auth in command line rather than URL (often more reliable)
     try {
-      const rtspUrl = `rtsp://${CONFIG.CAMERA_IP}:${CONFIG.CAMERA_PORT}/stream1`;
+      const rtspUrl = `rtsp://${camera.IP}:${camera.PORT}/stream1`;
       console.log(`Trying FFmpeg with auth flags: ${rtspUrl}`);
       
       const { exec } = require('child_process');
-      const command = `ffmpeg -y -rtsp_transport tcp -auth_type basic -user ${CONFIG.CAMERA_USERNAME} -pass ${CONFIG.CAMERA_PASSWORD} -i "${rtspUrl}" -frames:v 1 -v error "${outputPath}"`;
+      const command = `ffmpeg -y -rtsp_transport tcp -auth_type basic -user ${camera.USERNAME} -pass ${camera.PASSWORD} -i "${rtspUrl}" -frames:v 1 -v error "${outputPath}"`;
       
       const result = await new Promise((resolveExec) => {
         exec(command, { timeout: 10000 }, (error) => {
@@ -547,8 +564,8 @@ function trySimplifiedFfmpeg(outputPath) {
     
     // Try standard formats
     const rtspPatterns = [
-      `rtsp://${CONFIG.CAMERA_USERNAME}:${CONFIG.CAMERA_PASSWORD}@${CONFIG.CAMERA_IP}:${CONFIG.CAMERA_PORT}/stream1`,
-      `rtsp://${CONFIG.CAMERA_IP}:${CONFIG.CAMERA_PORT}/stream1`,
+      `rtsp://${camera.USERNAME}:${camera.PASSWORD}@${camera.IP}:${camera.PORT}/stream1`,
+      `rtsp://${camera.IP}:${camera.PORT}/stream1`,
     ];
     
     for (const rtspUrl of rtspPatterns) {
@@ -614,17 +631,33 @@ function trySimplifiedFfmpeg(outputPath) {
  * @throws {Error} If fetching or saving the snapshot fails
  */
 async function takeSnapshot(cameraName = 'default') {
-  console.log(`Taking snapshot from camera at IP ${CONFIG.CAMERA_IP}`);
+  // Verify if the camera name exists in our config, otherwise use default
+  const actualCameraName = CONFIG.cameras[cameraName] ? cameraName : 'default';
+  const camera = CONFIG.cameras[actualCameraName];
+  
+  console.log(`Taking snapshot from camera '${actualCameraName}' at IP ${camera.IP}`);
+  
+  // Check if this is an MJPEG camera
+  if (camera.TYPE === 'mjpeg') {
+    console.log('Detected MJPEG camera, using MJPEG protocol');
+    try {
+      return await takeMJPEGSnapshot(actualCameraName);
+    } catch (mjpegError) {
+      console.error(`MJPEG camera snapshot failed: ${mjpegError.message}`);
+      console.log('Trying generic camera methods as fallback...');
+      // Continue with standard methods as fallback
+    }
+  }
   
   // Create a unique filename based on timestamp
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `${cameraName}-${timestamp}.jpg`;
+  const filename = `${actualCameraName}-${timestamp}.jpg`;
   const filePath = path.join(CONFIG.TEMP_DIR, filename);
   
   try {
     // Start with the approach that worked in testing
     console.log("Using proven FFmpeg command format");
-    const rtspUrl = `rtsp://${CONFIG.CAMERA_USERNAME}:${CONFIG.CAMERA_PASSWORD}@${CONFIG.CAMERA_IP}:${CONFIG.CAMERA_PORT}/stream1`;
+    const rtspUrl = `rtsp://${camera.USERNAME}:${camera.PASSWORD}@${camera.IP}:${camera.PORT}/stream1`;
     
     // Use the exact command format that worked in testing
     const simpleCmd = `ffmpeg -y -rtsp_transport tcp -i "${rtspUrl}" -frames:v 1 "${filePath}"`;
@@ -650,7 +683,7 @@ async function takeSnapshot(cameraName = 'default') {
       
       // Try without embedded credentials but with -user and -pass options
       console.log("Trying FFmpeg with separate auth parameters...");
-      const authCmd = `ffmpeg -y -rtsp_transport tcp -i "rtsp://${CONFIG.CAMERA_IP}:${CONFIG.CAMERA_PORT}/stream1" -user ${CONFIG.CAMERA_USERNAME} -pass ${CONFIG.CAMERA_PASSWORD} -frames:v 1 "${filePath}"`;
+      const authCmd = `ffmpeg -y -rtsp_transport tcp -i "rtsp://${camera.IP}:${camera.PORT}/stream1" -user ${camera.USERNAME} -pass ${camera.PASSWORD} -frames:v 1 "${filePath}"`;
       
       try {
         console.log(`Executing command with separate auth parameters`);
@@ -669,7 +702,7 @@ async function takeSnapshot(cameraName = 'default') {
       // If still failing, try with auth_type options
       console.log("Trying FFmpeg with auth_type options...");
       // Try with TCP transport and auth_type options
-      const authTypeCmd = `ffmpeg -y -rtsp_transport tcp -auth_type basic -user ${CONFIG.CAMERA_USERNAME} -pass ${CONFIG.CAMERA_PASSWORD} -i "rtsp://${CONFIG.CAMERA_IP}:${CONFIG.CAMERA_PORT}/stream1" -frames:v 1 -v error "${filePath}"`;
+      const authTypeCmd = `ffmpeg -y -rtsp_transport tcp -auth_type basic -user ${camera.USERNAME} -pass ${camera.PASSWORD} -i "rtsp://${camera.IP}:${camera.PORT}/stream1" -frames:v 1 -v error "${filePath}"`;
       
       try {
         console.log(`Executing command with auth_type options`);
@@ -687,7 +720,7 @@ async function takeSnapshot(cameraName = 'default') {
       
       // Try with digest auth as last direct attempt
       console.log("Trying FFmpeg with digest auth...");
-      const digestAuthCmd = `ffmpeg -y -rtsp_transport tcp -auth_type digest -user ${CONFIG.CAMERA_USERNAME} -pass ${CONFIG.CAMERA_PASSWORD} -i "rtsp://${CONFIG.CAMERA_IP}:${CONFIG.CAMERA_PORT}/stream1" -frames:v 1 "${filePath}"`;
+      const digestAuthCmd = `ffmpeg -y -rtsp_transport tcp -auth_type digest -user ${camera.USERNAME} -pass ${camera.PASSWORD} -i "rtsp://${camera.IP}:${camera.PORT}/stream1" -frames:v 1 "${filePath}"`;
       
       try {
         console.log(`Executing command with digest auth`);
@@ -708,7 +741,7 @@ async function takeSnapshot(cameraName = 'default') {
     
     // First try RTSP URL patterns
     for (const pattern of CONFIG.RTSP_URL_PATTERNS) {
-      const rtspUrl = formatRtspUrl(pattern);
+      const rtspUrl = formatRtspUrl(pattern, actualCameraName);
       console.log(`Trying RTSP URL: ${rtspUrl.replace(/:.+?@/, ':***@')}`);
       
       const success = await captureFrameWithFFmpeg(rtspUrl, filePath);
@@ -725,7 +758,7 @@ async function takeSnapshot(cameraName = 'default') {
     
     // If RTSP failed, try ONVIF as fallback
     console.log('All RTSP attempts failed, trying ONVIF protocol...');
-    const onvifSuccess = await getSnapshotWithOnvif(filePath);
+    const onvifSuccess = await getSnapshotWithOnvif(filePath, actualCameraName);
     
     if (onvifSuccess) {
       const stats = await fs.stat(filePath);
@@ -738,7 +771,7 @@ async function takeSnapshot(cameraName = 'default') {
     
     // If ONVIF failed, try HTTP as last resort
     console.log('All ONVIF attempts failed, trying HTTP snapshot...');
-    const httpSuccess = await getSnapshotWithHttp(filePath);
+    const httpSuccess = await getSnapshotWithHttp(filePath, actualCameraName);
     
     if (httpSuccess) {
       const stats = await fs.stat(filePath);
@@ -751,7 +784,7 @@ async function takeSnapshot(cameraName = 'default') {
     
     // Try using FFmpeg directly with simplified options as a backup
     console.log('Trying simplified FFmpeg approach as backup...');
-    const simpleFfmpegSuccess = await trySimplifiedFfmpeg(filePath);
+    const simpleFfmpegSuccess = await trySimplifiedFfmpeg(filePath, actualCameraName);
     
     if (simpleFfmpegSuccess) {
       const stats = await fs.stat(filePath);
@@ -763,7 +796,7 @@ async function takeSnapshot(cameraName = 'default') {
     
     // Last resort - try with curl command directly (which sometimes works better than Node's HTTP client)
     console.log('All HTTP attempts failed, trying curl as last resort...');
-    const curlSuccess = await getSnapshotWithCurl(filePath);
+    const curlSuccess = await getSnapshotWithCurl(filePath, actualCameraName);
     
     if (curlSuccess) {
       const stats = await fs.stat(filePath);
@@ -793,17 +826,32 @@ async function takeSnapshot(cameraName = 'default') {
  */
 async function handleCameraCommand(msg, args) {
   try {
+    // Parse camera name from arguments
+    const requestedCamera = args ? args.trim().toLowerCase() : 'default';
+    
+    // Check if the requested camera exists
+    const availableCameras = Object.keys(CONFIG.cameras);
+    const cameraName = availableCameras.includes(requestedCamera) ? requestedCamera : 'default';
+    
+    if (requestedCamera !== cameraName) {
+      await msg.reply(formatMessage({
+        title: '⚠️ Cámara no encontrada',
+        body: `La cámara "${requestedCamera}" no está configurada. Usando la cámara predeterminada.`,
+        footer: `Cámaras disponibles: ${availableCameras.join(', ')}`
+      }));
+    }
+    
+    // Get camera type
+    const cameraType = camera.TYPE || 'rtsp';
+    
     // Send a processing message
     await msg.reply(formatMessage({
       title: '📸 Capturando imagen...',
-      body: 'Obteniendo imagen de la cámara, por favor espere...'
+      body: `Obteniendo imagen de la cámara "${cameraName}" (${cameraType.toUpperCase()}), por favor espere...`
     }));
     
     // Ensure temp directory exists
     await ensureTempDir();
-    
-    // Parse camera name from arguments
-    const cameraName = args ? args.trim() : 'default';
     
     // Take the snapshot
     const imagePath = await takeSnapshot(cameraName);
@@ -829,8 +877,9 @@ async function handleCameraCommand(msg, args) {
       
       // Use client.sendMessage directly for more compatibility
       const chat = await msg.getChat();
+      const cameraType = camera.TYPE || 'rtsp';
       await chat.sendMessage(messageMedia, { 
-        caption: `📸 Imagen de cámara: ${cameraName}\nCapturada: ${new Date().toLocaleString()}` 
+        caption: `📸 Imagen de cámara: ${cameraName} (${cameraType.toUpperCase()})\nCapturada: ${new Date().toLocaleString()}` 
       });
     } catch (mediaError) {
       console.error('Error sending media:', mediaError);
@@ -871,10 +920,407 @@ module.exports = {
    * @param {Object} commandHandler - Command handler instance
    */
   register: (commandHandler) => {
+    // Generate help text with available cameras and their types
+    const availableCameras = Object.keys(CONFIG.cameras).map(name => {
+      const type = CONFIG.cameras[name].TYPE || 'rtsp';
+      return `${name} (${type})`;
+    }).join(', ');
+    
     commandHandler.register(
       '!camera', 
       handleCameraCommand, 
-      'Toma una captura de la cámara y la envía: !camera [nombre_camara]'
+      `Toma una captura de la cámara y la envía: !camera [nombre_camara]. Cámaras disponibles: ${availableCameras}`
     );
   }
 };
+
+/**
+ * Get a snapshot from an MJPEG camera stream
+ * 
+ * @param {string} outputPath - Path to save the snapshot
+ * @param {string} cameraName - Name of the camera configuration to use
+ * @returns {Promise<boolean>} True if successful, false otherwise
+ */
+function getSnapshotFromMJPEGCamera(outputPath, cameraName) {
+  return new Promise(async (resolve) => {
+    const camera = CONFIG.cameras[cameraName];
+    
+    if (!camera || camera.TYPE !== 'mjpeg') {
+      console.log('Not an MJPEG camera or camera not found');
+      return resolve(false);
+    }
+    
+    console.log(`Trying to capture MJPEG stream from camera: ${cameraName}`);
+    
+    const http = require('http');
+    const https = require('https');
+    
+    // Construct the URL for the MJPEG stream
+    const protocol = camera.PORT === '443' ? 'https' : 'http';
+    let url = `${protocol}://${camera.IP}`;
+    if ((protocol === 'http' && camera.PORT !== '80') || 
+        (protocol === 'https' && camera.PORT !== '443')) {
+      url += `:${camera.PORT}`;
+    }
+    url += camera.PATH || '/video/mjpg/1';
+    
+    console.log(`Connecting to MJPEG stream: ${url}`);
+    
+    // Create request options with auth if provided
+    const requestOptions = {
+      timeout: 10000,
+      rejectUnauthorized: false // Accept self-signed certificates
+    };
+    
+    // Add authentication if provided
+    if (camera.USERNAME && camera.PASSWORD) {
+      requestOptions.auth = `${camera.USERNAME}:${camera.PASSWORD}`;
+    }
+    
+    // Determine which protocol client to use
+    const client = protocol === 'https' ? https : http;
+    
+    try {
+      const req = client.get(url, requestOptions, (res) => {
+        // Check if we got a valid response
+        if (res.statusCode !== 200) {
+          console.log(`MJPEG connection failed with status: ${res.statusCode}`);
+          return resolve(false);
+        }
+        
+        // Check content type to confirm it's an MJPEG stream
+        const contentType = res.headers['content-type'] || '';
+        if (!contentType.includes('multipart/x-mixed-replace')) {
+          console.log(`Unexpected content type for MJPEG stream: ${contentType}`);
+          // Some cameras might not set the correct content type, so continue anyway
+        }
+        
+        // Variables to hold the boundary and frame data
+        let boundary = '';
+        let imageBuffer = Buffer.alloc(0);
+        let isCollectingImage = false;
+        let frameHeaderFound = false;
+        
+        // Extract boundary from content type
+        if (contentType.includes('boundary=')) {
+          boundary = contentType.split('boundary=')[1].trim();
+          console.log(`MJPEG stream boundary: ${boundary}`);
+        }
+        
+        // Handle the chunked data stream
+        res.on('data', (chunk) => {
+          if (!isCollectingImage) {
+            // Look for JPEG start marker in the chunk (0xFF 0xD8)
+            const startMarkerIndex = chunk.indexOf(Buffer.from([0xFF, 0xD8]));
+            if (startMarkerIndex !== -1) {
+              console.log('Found JPEG start marker');
+              imageBuffer = chunk.slice(startMarkerIndex);
+              isCollectingImage = true;
+              frameHeaderFound = true;
+            }
+          } else {
+            // Check if this chunk contains a boundary indicating the end of the frame
+            const chunkStr = chunk.toString();
+            
+            // Check for a boundary if we have one, or for the start of a new frame
+            const isBoundaryInChunk = boundary && chunkStr.includes(boundary);
+            const hasNewJpegStart = chunk.includes(Buffer.from([0xFF, 0xD8])) && imageBuffer.length > 1000; // Only consider as a boundary if we've already collected some data
+            
+            if (isBoundaryInChunk || hasNewJpegStart) {
+              console.log('Found frame boundary');
+              
+              // If we have a complete frame, save it
+              if (frameHeaderFound && imageBuffer.length > 1000) { // Minimum reasonable JPEG size
+                const endMarkerIndex = imageBuffer.indexOf(Buffer.from([0xFF, 0xD9]));
+                if (endMarkerIndex !== -1) {
+                  // We have a complete JPEG (with start and end markers)
+                  const completeImage = imageBuffer.slice(0, endMarkerIndex + 2);
+                  
+                  // Verify the image is valid
+                  if (isValidJpegImage(completeImage)) {
+                    // Save the image and resolve the promise
+                    fs.writeFile(outputPath, completeImage)
+                      .then(() => {
+                        console.log(`✅ MJPEG frame saved successfully (${completeImage.length} bytes)`);
+                        req.destroy(); // Close the connection
+                        resolve(true);
+                      })
+                      .catch((err) => {
+                        console.error('Error saving MJPEG frame:', err);
+                        req.destroy(); // Close the connection on error
+                        resolve(false);
+                      });
+                  } else {
+                    console.log('Invalid JPEG image received from MJPEG stream');
+                    // Continue collecting frames, don't resolve yet
+                  }
+                  
+                  return; // Exit the data handler after saving
+                }
+              }
+              
+              // Start collecting a new frame if we didn't find a complete one
+              if (hasNewJpegStart) {
+                const startMarkerIndex = chunk.indexOf(Buffer.from([0xFF, 0xD8]));
+                imageBuffer = chunk.slice(startMarkerIndex);
+                frameHeaderFound = true;
+              } else {
+                // Reset for next frame
+                imageBuffer = Buffer.alloc(0);
+                isCollectingImage = false;
+                frameHeaderFound = false;
+              }
+            } else {
+              // Continue collecting the current frame
+              imageBuffer = Buffer.concat([imageBuffer, chunk]);
+            }
+          }
+        });
+        
+        // Handle errors and timeout
+        res.on('error', (err) => {
+          console.error('MJPEG stream error:', err);
+          resolve(false);
+        });
+        
+        // Set a timeout to prevent hanging forever
+        setTimeout(() => {
+          console.log('MJPEG capture timed out');
+          if (!req.destroyed) {
+            req.destroy();
+            resolve(false);
+          }
+        }, 15000); // 15 seconds timeout
+      });
+      
+      req.on('error', (err) => {
+        console.error('MJPEG request error:', err);
+        resolve(false);
+      });
+      
+      req.on('timeout', () => {
+        console.log('MJPEG request timed out');
+        req.destroy();
+        resolve(false);
+      });
+      
+    } catch (error) {
+      console.error('Error in MJPEG capture:', error);
+      resolve(false);
+    }
+  });
+}
+
+/**
+ * Take a snapshot from an MJPEG camera
+ * 
+ * @async
+ * @param {string} cameraName - Name of the camera configuration to use
+ * @returns {Promise<string>} Path to the saved image file
+ * @throws {Error} If fetching or saving the snapshot fails
+ */
+async function takeMJPEGSnapshot(cameraName) {
+  console.log(`Taking MJPEG snapshot from camera '${cameraName}'`);
+  
+  // Create a unique filename based on timestamp
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `${cameraName}-mjpeg-${timestamp}.jpg`;
+  const filePath = path.join(CONFIG.TEMP_DIR, filename);
+  
+  try {
+    // Try to get snapshot from MJPEG camera
+    const success = await getSnapshotFromMJPEGCamera(filePath, cameraName);
+    
+    if (success) {
+      // Verify file exists and has content
+      const stats = await fs.stat(filePath);
+      if (stats.size > 100) {
+        console.log(`✅ MJPEG snapshot successfully saved to: ${filePath}`);
+        return filePath;
+      }
+      throw new Error('MJPEG snapshot too small or invalid');
+    }
+    
+    // Fallback method: try to get snapshot using ffmpeg which also works with some MJPEG streams
+    console.log('Direct MJPEG capture failed, trying FFmpeg as fallback...');
+    const camera = CONFIG.cameras[cameraName];
+    
+    // Construct the URL for FFmpeg
+    const protocol = camera.PORT === '443' ? 'https' : 'http';
+    let url = `${protocol}://${camera.IP}`;
+    if ((protocol === 'http' && camera.PORT !== '80') || 
+        (protocol === 'https' && camera.PORT !== '443')) {
+      url += `:${camera.PORT}`;
+    }
+    url += camera.PATH || '/video/mjpg/1';
+    
+    // Add authentication if provided
+    if (camera.USERNAME && camera.PASSWORD) {
+      // Insert credentials into the URL
+      url = url.replace('://', `://${encodeURIComponent(camera.USERNAME)}:${encodeURIComponent(camera.PASSWORD)}@`);
+    }
+    
+    console.log(`Trying FFmpeg with MJPEG URL: ${url.replace(/:.+?@/, ':***@')}`);
+    
+    // Use FFmpeg to capture a frame from the MJPEG stream
+    const ffmpegProcess = spawn('ffmpeg', [
+      '-y',                // Overwrite output files without asking
+      '-i', url,           // Input stream URL
+      '-frames:v', '1',    // Get a single frame
+      '-q:v', '2',         // Quality level (lower is better)
+      filePath             // Output file path
+    ]);
+    
+    const ffmpegResult = await new Promise((resolveFFmpeg) => {
+      ffmpegProcess.on('close', (code) => {
+        if (code === 0) {
+          resolveFFmpeg(true);
+        } else {
+          console.error(`FFmpeg process exited with code ${code}`);
+          resolveFFmpeg(false);
+        }
+      });
+      
+      // Set timeout to prevent hanging
+      setTimeout(() => {
+        try {
+          ffmpegProcess.kill('SIGKILL');
+          console.log('FFmpeg MJPEG capture timed out');
+          resolveFFmpeg(false);
+        } catch (e) { /* ignore */ }
+      }, 10000);
+    });
+    
+    if (ffmpegResult) {
+      // Verify file exists and has content
+      const stats = await fs.stat(filePath);
+      if (stats.size > 100) {
+        console.log(`✅ MJPEG snapshot (via FFmpeg) successfully saved to: ${filePath}`);
+        return filePath;
+      }
+    }
+    
+    // Try the curl method as a last resort
+    console.log('Trying curl as a last resort for MJPEG camera...');
+    const curlSuccess = await getSnapshotFromMJPEGCameraWithCurl(filePath, cameraName);
+    
+    if (curlSuccess) {
+      // Verify file exists and has content
+      const stats = await fs.stat(filePath);
+      if (stats.size > 100) {
+        console.log(`✅ MJPEG snapshot (via curl) successfully saved to: ${filePath}`);
+        return filePath;
+      }
+    }
+    
+    throw new Error('Failed to get snapshot from MJPEG camera after trying all methods');
+  } catch (error) {
+    console.error('Error taking MJPEG camera snapshot:', error);
+    throw new Error(`Could not get image from MJPEG camera: ${error.message}`);
+  }
+}
+
+/**
+ * Verify if a buffer contains a valid JPEG image
+ * 
+ * @param {Buffer} buffer - The buffer to check
+ * @returns {boolean} True if the buffer appears to be a valid JPEG
+ */
+function isValidJpegImage(buffer) {
+  // Check minimum size
+  if (!buffer || buffer.length < 100) {
+    return false;
+  }
+
+  // Check for JPEG SOI marker (Start Of Image)
+  if (buffer[0] !== 0xFF || buffer[1] !== 0xD8) {
+    return false;
+  }
+
+  // Check for JPEG EOI marker (End Of Image)
+  // This should be at the end of the buffer
+  const hasEndMarker = buffer.includes(Buffer.from([0xFF, 0xD9]));
+  if (!hasEndMarker) {
+    return false;
+  }
+
+  // Additional sanity checks could be added here
+  // For example, checking for valid JPEG structure, minimum dimensions, etc.
+
+  return true;
+}
+
+/**
+ * Try to capture a snapshot from an MJPEG stream using curl
+ * Sometimes curl handles auth and streaming better than Node.js
+ * 
+ * @param {string} outputPath - Path to save the snapshot
+ * @param {string} cameraName - Name of the camera configuration to use
+ * @returns {Promise<boolean>} True if successful, false otherwise
+ */
+function getSnapshotFromMJPEGCameraWithCurl(outputPath, cameraName) {
+  return new Promise((resolve) => {
+    const camera = CONFIG.cameras[cameraName];
+    
+    if (!camera || camera.TYPE !== 'mjpeg') {
+      console.log('Not an MJPEG camera or camera not found');
+      return resolve(false);
+    }
+    
+    // Construct the URL for the MJPEG stream
+    const protocol = camera.PORT === '443' ? 'https' : 'http';
+    let url = `${protocol}://${camera.IP}`;
+    if ((protocol === 'http' && camera.PORT !== '80') || 
+        (protocol === 'https' && camera.PORT !== '443')) {
+      url += `:${camera.PORT}`;
+    }
+    url += camera.PATH || '/video/mjpg/1';
+    
+    console.log(`Trying curl with MJPEG URL: ${url.replace(/:.+?@/, ':***@')}`);
+    
+    // Prepare the curl command with proper authentication
+    let curlCmd = `curl -s -k`;
+    
+    // Add auth if provided
+    if (camera.USERNAME && camera.PASSWORD) {
+      curlCmd += ` -u "${camera.USERNAME}:${camera.PASSWORD}"`;
+    }
+    
+    // Add options to handle the MJPEG stream and timeout
+    curlCmd += ` --max-time 10`;
+    curlCmd += ` --connect-timeout 5`;
+    curlCmd += ` -H "Accept: image/jpeg"`;
+    
+    // Complete the command with the URL and output processing
+    curlCmd += ` "${url}" | dd bs=1M count=1 of="${outputPath}" 2>/dev/null`;
+    
+    console.log(`Executing curl command for MJPEG stream`);
+    
+    // Execute the curl command
+    const { exec } = require('child_process');
+    exec(curlCmd, async (error, stdout, stderr) => {
+      if (error) {
+        console.error(`curl error: ${error.message}`);
+        return resolve(false);
+      }
+      
+      try {
+        // Check if file exists and is valid
+        const stats = await fs.stat(outputPath);
+        if (stats.size > 1000) { // Reasonable minimum size for a JPEG
+          // Read the file to validate it's a JPEG
+          const buffer = await fs.readFile(outputPath);
+          if (isValidJpegImage(buffer)) {
+            console.log(`✅ MJPEG snapshot captured with curl (${stats.size} bytes)`);
+            return resolve(true);
+          }
+        }
+        console.log(`Invalid or empty image captured with curl`);
+        return resolve(false);
+      } catch (err) {
+        console.error(`Error verifying curl output: ${err.message}`);
+        return resolve(false);
+      }
+    });
+  });
+}

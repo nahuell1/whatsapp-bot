@@ -203,10 +203,12 @@ const webhooks = require('./webhooks');
  */
 const webhookUtils = require('./webhooks/webhookUtils');
 const chatbotHandler = require('./commands/chatbotCommand');
+const messageFilter = require('./commands/messageFilter');
 
 /**
  * Message event handler
  * Processes incoming WhatsApp messages and routes them to appropriate handlers
+ * Only allows messages from admin numbers configured in ADMIN_NUMBERS env variable
  * 
  * @async
  * @param {Object} msg - The WhatsApp message object
@@ -215,6 +217,14 @@ client.on('message', async msg => {
   console.log('Message received:', msg.body);
   
   try {
+    // Check if the sender is authorized (admin number)
+    const isAuthorized = await messageFilter.isAuthorizedSender(msg);
+    
+    if (!isAuthorized) {
+      console.log('Unauthorized message received. Ignoring.');
+      return;
+    }
+    
     // Let the command handler process the message
     // It will return true if a command was handled
     const wasHandled = await commands.handleMessage(msg);
