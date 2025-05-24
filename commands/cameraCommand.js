@@ -21,35 +21,101 @@ const { formatMessage } = require('./utils');
 const { spawn } = require('child_process');
 
 /**
+ * Automatically discover cameras from environment variables
+ * Environment variables should follow the pattern: CAMERA_[NAME]_[CONFIG]
+ * Example: CAMERA_FRONT_IP=192.168.1.100, CAMERA_FRONT_TYPE=mjpeg
+ * @returns {Object} Camera configurations
+ */
+function discoverCameras() {
+  const cameras = {};
+  const processedCameras = new Set();
+  
+  // First, add legacy cameras for backward compatibility
+  if (process.env.CAMERA_IP) {
+    cameras['default'] = {
+      IP: process.env.CAMERA_IP,
+      PORT: process.env.CAMERA_PORT || '554',
+      USERNAME: process.env.CAMERA_USERNAME || 'admin',
+      PASSWORD: process.env.CAMERA_PASSWORD || '',
+      TYPE: process.env.CAMERA_TYPE || 'rtsp',
+      PATH: process.env.CAMERA_PATH || undefined
+    };
+  }
+  
+  // Legacy camera 2
+  if (process.env.CAMERA2_IP) {
+    cameras['2'] = {
+      IP: process.env.CAMERA2_IP,
+      PORT: process.env.CAMERA2_PORT || '8081',
+      USERNAME: process.env.CAMERA2_USERNAME || '',
+      PASSWORD: process.env.CAMERA2_PASSWORD || '',
+      TYPE: process.env.CAMERA2_TYPE || 'mjpeg',
+      PATH: process.env.CAMERA2_PATH || '?action=stream'
+    };
+  }
+  
+  // Discover new pattern cameras: CAMERA_[NAME]_[CONFIG]
+  for (const [key, value] of Object.entries(process.env)) {
+    const match = key.match(/^CAMERA_([A-Z0-9_]+)_(.+)$/);
+    if (match) {
+      const [, cameraName, configKey] = match;
+      const normalizedName = cameraName.toLowerCase();
+      
+      if (!cameras[normalizedName]) {
+        cameras[normalizedName] = {
+          IP: '',
+          PORT: '554',
+          USERNAME: 'admin',
+          PASSWORD: '',
+          TYPE: 'rtsp',
+          PATH: undefined
+        };
+      }
+      
+      // Map config keys to camera properties
+      switch (configKey.toUpperCase()) {
+        case 'IP':
+          cameras[normalizedName].IP = value;
+          break;
+        case 'PORT':
+          cameras[normalizedName].PORT = value;
+          break;
+        case 'USERNAME':
+          cameras[normalizedName].USERNAME = value;
+          break;
+        case 'PASSWORD':
+          cameras[normalizedName].PASSWORD = value;
+          break;
+        case 'TYPE':
+          cameras[normalizedName].TYPE = value.toLowerCase();
+          break;
+        case 'PATH':
+          cameras[normalizedName].PATH = value;
+          break;
+      }
+      
+      processedCameras.add(normalizedName);
+    }
+  }
+  
+  // Remove cameras without IP addresses
+  for (const [name, config] of Object.entries(cameras)) {
+    if (!config.IP) {
+      delete cameras[name];
+    }
+  }
+  
+  console.log(`Discovered ${Object.keys(cameras).length} cameras:`, Object.keys(cameras));
+  return cameras;
+}
+
+/**
  * Configuration from environment variables with sensible defaults
  * @constant {Object}
  */
 const CONFIG = {
-  // Camera settings with default values
-  cameras: {
-    'default': {
-      IP: process.env.CAMERA_IP || '192.168.0.43',
-      PORT: process.env.CAMERA_PORT || '554',
-      USERNAME: process.env.CAMERA_USERNAME || 'admin',
-      PASSWORD: process.env.CAMERA_PASSWORD || '',
-      TYPE: 'rtsp' // Default camera type is RTSP
-    },
-    'camera2': {
-      IP: process.env.CAMERA2_IP || '192.168.0.44',
-      PORT: process.env.CAMERA2_PORT || '554',
-      USERNAME: process.env.CAMERA2_USERNAME || 'admin',
-      PASSWORD: process.env.CAMERA2_PASSWORD || '',
-      TYPE: 'rtsp' // Second camera is also RTSP
-    },
-    'mjpeg': {
-      IP: process.env.CAMERA3_IP || '192.168.0.45',
-      PORT: process.env.CAMERA3_PORT || '80',
-      USERNAME: process.env.CAMERA3_USERNAME || 'admin',
-      PASSWORD: process.env.CAMERA3_PASSWORD || '',
-      PATH: process.env.CAMERA3_PATH || '/video/mjpg/1',
-      TYPE: process.env.CAMERA3_TYPE || 'mjpeg' // Third camera is MJPEG
-    }
-  },
+  // Auto-discovered camera settings
+  cameras: discoverCameras(),
   
   // RTSP URL patterns to try (specific patterns for TAPO C100 cameras)
   RTSP_URL_PATTERNS: [
@@ -199,7 +265,91 @@ function captureFrameWithFFmpeg(rtspUrl, outputPath) {
 }
 
 /**
- * Try to get a snapshot using ONVIF protocol
+ * Download a snapshot from an HTTP URL
+ * 
+ * @param {string} url - The HTTP URL to download from
+ * @param {string} outputPath - Path to save the snapshot
+ * @returns {Promise<boolean>} True if successful, false otherwise
+ */
+function downloadHttpSnapshot(url, outputPath) {
+  return new Promise((resolve) => {
+    console.log(`Downloading HTTP snapshot from: ${url.replace(/:.+?@/, ':***@')}`);
+    
+    const http = require('http');
+    const https = require('https');
+    
+    // Determine which protocol to use
+    const client = url.startsWith('https') ? https : http;
+    const requestOptions = { 
+      timeout: 10000,
+      rejectUnauthorized: false // Accept self-signed certificates
+    };
+    
+    // Make the request
+    const req = client.get(url, requestOptions, (res) => {
+      if (res.statusCode !== 200) {
+        console.log(`HTTP snapshot request failed with status: ${res.statusCode}`);
+        return resolve(false);
+      }
+      
+      const imageChunks = [];
+      
+      res.on('data', (chunk) => {
+        imageChunks.push(chunk);
+      });
+      
+      res.on('end', async () => {
+        if (imageChunks.length > 0) {
+          try {
+            const imageBuffer = Buffer.concat(imageChunks);
+            console.log(`Received ${imageBuffer.length} bytes from HTTP snapshot request`);
+            
+            // Verify it's likely an image (check for JPEG/PNG headers)
+            const isJpeg = imageBuffer.length > 2 && 
+              imageBuffer[0] === 0xFF && 
+              imageBuffer[1] === 0xD8;
+              
+            const isPng = imageBuffer.length > 8 &&
+              imageBuffer[0] === 0x89 && 
+              imageBuffer[1] === 0x50 &&
+              imageBuffer[2] === 0x4E &&
+              imageBuffer[3] === 0x47;
+              
+            if (!isJpeg && !isPng) {
+              console.log('HTTP response does not appear to be an image');
+              return resolve(false);
+            }
+            
+            await fs.writeFile(outputPath, imageBuffer);
+            console.log('✅ HTTP snapshot downloaded and saved successfully');
+            resolve(true);
+          } catch (err) {
+            console.error('Error saving HTTP snapshot:', err.message);
+            resolve(false);
+          }
+        } else {
+          console.log('No data received from HTTP snapshot request');
+          resolve(false);
+        }
+      });
+    });
+    
+    req.on('error', (err) => {
+      console.log(`HTTP snapshot request error: ${err.message}`);
+      resolve(false);
+    });
+    
+    req.on('timeout', () => {
+      console.log('HTTP snapshot request timed out');
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * Try to get a snapshot using ONVIF protocol with configured path
+ * Uses the specific PATH from configuration instead of trying multiple routes
  * 
  * @param {string} outputPath - Path to save the snapshot
  * @param {string} cameraName - Name of the camera configuration to use
@@ -208,80 +358,126 @@ function captureFrameWithFFmpeg(rtspUrl, outputPath) {
 function getSnapshotWithOnvif(outputPath, cameraName) {
   const camera = CONFIG.cameras[cameraName] || CONFIG.cameras['default'];
   return new Promise(async (resolve) => {
-    console.log(`Trying ONVIF connection to camera at ${camera.IP}`);
+    console.log(`Trying ONVIF connection to camera at ${camera.IP}:${camera.PORT}`);
     
-    // Common ONVIF ports to try
-    const portsToTry = [80, 443, 8000, 8080, 8081, 2020];
-    
-    for (const port of portsToTry) {
-      console.log(`Attempting ONVIF connection on port ${port}...`);
+    // If we have a specific PATH configured, use it directly as an HTTP snapshot URL
+    if (camera.PATH) {
+      console.log(`Using configured ONVIF path: ${camera.PATH}`);
       
-      try {
-        // Create a promise that can be resolved by either success or timeout
-        const connectionResult = await new Promise((resolveConnection) => {
-          const cam = new Cam({
-            hostname: camera.IP,
-            username: camera.USERNAME,
-            password: camera.PASSWORD,
-            port: port,
-            timeout: 5000
-          }, (err) => {
-            if (err) {
-              console.log(`ONVIF connection error on port ${port}: ${err.message}`);
+      // Construct the full HTTP URL using the configured path
+      const protocol = camera.PORT === '443' ? 'https' : 'http';
+      let snapshotUrl = `${protocol}://${camera.IP}`;
+      if ((protocol === 'http' && camera.PORT !== '80') || 
+          (protocol === 'https' && camera.PORT !== '443')) {
+        snapshotUrl += `:${camera.PORT}`;
+      }
+      
+      // Add the configured path
+      if (!camera.PATH.startsWith('/')) {
+        snapshotUrl += '/';
+      }
+      snapshotUrl += camera.PATH;
+      
+      // Add authentication if not already in the path
+      if (!snapshotUrl.includes('@') && camera.USERNAME && camera.PASSWORD) {
+        try {
+          const urlObject = new URL(snapshotUrl);
+          urlObject.username = camera.USERNAME;
+          urlObject.password = camera.PASSWORD;
+          snapshotUrl = urlObject.toString();
+        } catch (error) {
+          console.error('Error formatting snapshot URL:', error.message);
+        }
+      }
+      
+      console.log(`Using direct ONVIF snapshot URL: ${snapshotUrl.replace(/:.+?@/, ':***@')}`);
+      
+      // Try to download the snapshot directly
+      const httpSuccess = await downloadHttpSnapshot(snapshotUrl, outputPath);
+      if (httpSuccess) {
+        console.log(`✅ ONVIF direct snapshot captured successfully`);
+        return resolve(true);
+      }
+    }
+    
+    // Fallback: Use ONVIF discovery only if no PATH is configured
+    console.log('No specific path configured or direct path failed, trying ONVIF discovery...');
+    
+    // Use only the configured port, don't try multiple ports
+    const port = parseInt(camera.PORT) || 80;
+    console.log(`Attempting ONVIF discovery on configured port ${port}...`);
+    
+    try {
+      // Create a promise that can be resolved by either success or timeout
+      const connectionResult = await new Promise((resolveConnection) => {
+        const cam = new Cam({
+          hostname: camera.IP,
+          username: camera.USERNAME,
+          password: camera.PASSWORD,
+          port: port,
+          timeout: 5000
+        }, (err) => {
+          if (err) {
+            console.log(`ONVIF connection error on port ${port}: ${err.message}`);
+            resolveConnection({ success: false });
+            return;
+          }
+          
+          cam.getSnapshotUri((err, result) => {
+            if (err || !result || !result.uri) {
+              console.log(`Failed to get ONVIF snapshot URI on port ${port}: ${err ? err.message : 'No URI returned'}`);
               resolveConnection({ success: false });
               return;
             }
             
-            cam.getSnapshotUri((err, result) => {
-              if (err || !result || !result.uri) {
-                console.log(`Failed to get ONVIF snapshot URI on port ${port}: ${err ? err.message : 'No URI returned'}`);
-                resolveConnection({ success: false });
-                return;
+            // Format the URI, adding authentication if not included
+            let snapshotUrl = result.uri;
+            if (!snapshotUrl.includes('@') && camera.USERNAME) {
+              try {
+                const urlObject = new URL(snapshotUrl);
+                urlObject.username = camera.USERNAME;
+                urlObject.password = camera.PASSWORD;
+                snapshotUrl = urlObject.toString();
+              } catch (error) {
+                console.error('Error formatting snapshot URL:', error.message);
               }
-              
-              // Format the URI, adding authentication if not included
-              let snapshotUrl = result.uri;
-              if (!snapshotUrl.includes('@') && camera.USERNAME) {
-                try {
-                  const urlObject = new URL(snapshotUrl);
-                  urlObject.username = camera.USERNAME;
-                  urlObject.password = camera.PASSWORD;
-                  snapshotUrl = urlObject.toString();
-                } catch (error) {
-                  console.error('Error formatting snapshot URL:', error.message);
-                }
-              }
-              
-              console.log(`✅ Got ONVIF snapshot URL on port ${port}: ${snapshotUrl.replace(/:.+?@/, ':***@')}`);
-              resolveConnection({ success: true, url: snapshotUrl });
-            });
+            }
+            
+            console.log(`✅ Got ONVIF snapshot URL on port ${port}: ${snapshotUrl.replace(/:.+?@/, ':***@')}`);
+            resolveConnection({ success: true, url: snapshotUrl });
           });
-          
-          // Handle connection timeout
-          setTimeout(() => {
-            console.log(`ONVIF connection timed out on port ${port}`);
-            resolveConnection({ success: false });
-          }, 5000);
         });
         
-        // If we got a URL, try to capture the snapshot
-        if (connectionResult.success && connectionResult.url) {
-          const captureSuccess = await captureFrameWithFFmpeg(connectionResult.url, outputPath);
-          
-          if (captureSuccess) {
-            console.log(`✅ ONVIF snapshot captured successfully on port ${port}`);
-            return resolve(true);
-          }
-        }
-      } catch (error) {
-        console.error(`Error in ONVIF connection attempt on port ${port}:`, error.message);
-      }
+        // Handle connection timeout
+        setTimeout(() => {
+          console.log(`ONVIF connection timed out on port ${port}`);
+          resolveConnection({ success: false });
+        }, 5000);
+      });
       
-      // Wait a bit before trying the next port
-      await new Promise(r => setTimeout(r, 1000));
+      // If we got a URL, try to capture the snapshot
+      if (connectionResult.success && connectionResult.url) {
+        let captureSuccess = false;
+        
+        // Check if this is an HTTP snapshot URL or RTSP stream
+        if (connectionResult.url.startsWith('http://') || connectionResult.url.startsWith('https://')) {
+          console.log('Detected HTTP snapshot URL, using HTTP download...');
+          captureSuccess = await downloadHttpSnapshot(connectionResult.url, outputPath);
+        } else {
+          console.log('Detected RTSP stream URL, using FFmpeg...');
+          captureSuccess = await captureFrameWithFFmpeg(connectionResult.url, outputPath);
+        }
+        
+        if (captureSuccess) {
+          console.log(`✅ ONVIF snapshot captured successfully on port ${port}`);
+          return resolve(true);
+        }
+      }
+    } catch (error) {
+      console.error(`Error in ONVIF connection attempt on port ${port}:`, error.message);
     }
     
-    console.log('All ONVIF connection attempts failed');
+    console.log('ONVIF connection attempt failed');
     resolve(false);
   });
 }
@@ -835,19 +1031,20 @@ async function handleCameraCommand(msg, args) {
     
     if (requestedCamera !== cameraName) {
       await msg.reply(formatMessage({
-        title: '⚠️ Cámara no encontrada',
-        body: `La cámara "${requestedCamera}" no está configurada. Usando la cámara predeterminada.`,
-        footer: `Cámaras disponibles: ${availableCameras.join(', ')}`
+        title: '⚠️ Camera not found',
+        body: `Camera "${requestedCamera}" is not configured. Using default camera.`,
+        footer: `Available cameras: ${availableCameras.join(', ')}`
       }));
     }
     
-    // Get camera type
+    // Get camera configuration
+    const camera = CONFIG.cameras[cameraName];
     const cameraType = camera.TYPE || 'rtsp';
     
     // Send a processing message
     await msg.reply(formatMessage({
-      title: '📸 Capturando imagen...',
-      body: `Obteniendo imagen de la cámara "${cameraName}" (${cameraType.toUpperCase()}), por favor espere...`
+      title: '📸 Capturing image...',
+      body: `Getting image from camera "${cameraName}" (${cameraType.toUpperCase()}), please wait...`
     }));
     
     // Ensure temp directory exists
@@ -863,7 +1060,7 @@ async function handleCameraCommand(msg, args) {
       // Verify file exists and has content
       const stats = await fs.stat(imagePath);
       if (stats.size === 0) {
-        throw new Error('La imagen capturada está vacía');
+        throw new Error('The captured image is empty');
       }
       
       console.log(`Image file size: ${stats.size} bytes`);
@@ -879,14 +1076,14 @@ async function handleCameraCommand(msg, args) {
       const chat = await msg.getChat();
       const cameraType = camera.TYPE || 'rtsp';
       await chat.sendMessage(messageMedia, { 
-        caption: `📸 Imagen de cámara: ${cameraName} (${cameraType.toUpperCase()})\nCapturada: ${new Date().toLocaleString()}` 
+        caption: `📸 Camera image: ${cameraName} (${cameraType.toUpperCase()})\nCaptured: ${new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}` 
       });
     } catch (mediaError) {
       console.error('Error sending media:', mediaError);
       await msg.reply(formatMessage({
-        title: '❌ Error al enviar imagen',
-        body: `La imagen se capturó correctamente pero no se pudo enviar: ${mediaError.message}`,
-        footer: 'La imagen está disponible en el servidor.'
+        title: '❌ Error sending image',
+        body: `The image was captured correctly but could not be sent: ${mediaError.message}`,
+        footer: 'The image is available on the server.'
       }));
     }
     
@@ -903,10 +1100,147 @@ async function handleCameraCommand(msg, args) {
     console.error('Camera command error:', error);
     await msg.reply(formatMessage({
       title: '❌ Error',
-      body: `No se pudo obtener la imagen: ${error.message}`,
-      footer: 'Verifique la configuración de la cámara y vuelva a intentarlo.'
+      body: `Could not get image: ${error.message}`,
+      footer: 'Check camera configuration and try again.'
     }));
   }
+}
+
+/**
+ * Handle the !cameras command - captures from all available cameras
+ * 
+ * @async
+ * @param {Object} msg - WhatsApp message object
+ */
+async function handleCamerasCommand(msg) {
+  const cameraNames = Object.keys(CONFIG.cameras);
+  
+  if (cameraNames.length === 0) {
+    await msg.reply(formatMessage({
+      title: '❌ No cameras configured',
+      body: 'No cameras are currently configured in the system.',
+      footer: 'Check your environment variables for camera configurations.'
+    }));
+    return;
+  }
+
+  // Send initial status message
+  await msg.reply(formatMessage({
+    title: '📸 Capturing from all cameras',
+    body: `Starting capture from ${cameraNames.length} camera(s): (${cameraNames.join(', ')})`,
+    footer: 'This may take a few moments...'
+  }));
+
+  // Ensure temp directory exists
+  await ensureTempDir();
+
+  const results = [];
+  const capturedImages = [];
+  
+  // Capture from each camera sequentially to avoid overloading
+  for (const cameraName of cameraNames) {
+    try {
+      console.log(`Starting capture from camera: ${cameraName}`);
+      
+      const imagePath = await takeSnapshot(cameraName);
+      
+      // Verify file exists and has content
+      const stats = await fs.stat(imagePath);
+      if (stats.size === 0) {
+        throw new Error('The captured image is empty');
+      }
+      
+      console.log(`Image file size: ${stats.size} bytes`);
+      
+      // Read file as buffer and base64 encode it manually
+      const fileBuffer = await fs.readFile(imagePath);
+      const base64Data = fileBuffer.toString('base64');
+      
+      // Create MessageMedia object manually with correct parameters
+      const { MessageMedia } = require('whatsapp-web.js');
+      const messageMedia = new MessageMedia('image/jpeg', base64Data, `camera_${cameraName}.jpg`);
+      
+      capturedImages.push({
+        media: messageMedia,
+        cameraName,
+        cameraType: CONFIG.cameras[cameraName].TYPE || 'rtsp',
+        imagePath
+      });
+      
+      results.push({ camera: cameraName, status: 'success' });
+      
+    } catch (error) {
+      console.error(`Error capturing from camera ${cameraName}:`, error);
+      results.push({ camera: cameraName, status: 'failed', error: error.message });
+    }
+  }
+  
+  // Send all captured images together if any were successful
+  if (capturedImages.length > 0) {
+    try {
+      const chat = await msg.getChat();
+      
+      // Create caption with camera details
+      const cameraDetails = capturedImages.map(img => 
+        `📸 ${img.cameraName.charAt(0).toUpperCase() + img.cameraName.slice(1)} (${img.cameraType.toUpperCase()})`
+      ).join('\n');
+      
+      const currentTime = new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+      
+      if (capturedImages.length === 1) {
+        // Single image
+        await chat.sendMessage(capturedImages[0].media, { 
+          caption: `${cameraDetails}\nCaptured: ${currentTime}` 
+        });
+      } else {
+        // Multiple images - send them as an album/group
+        const mediaArray = capturedImages.map(img => img.media);
+        
+        for (const imgData of capturedImages) {
+          await chat.sendMessage(imgData.media);
+        }
+      }
+    } catch (mediaError) {
+      console.error('Error sending captured images:', mediaError);
+      await msg.reply(formatMessage({
+        title: '❌ Error sending images',
+        body: `${capturedImages.length} image(s) were captured but could not be sent: ${mediaError.message}`,
+        footer: 'The images are available on the server.'
+      }));
+      
+      // Update results to reflect send failure
+      results.forEach(result => {
+        if (result.status === 'success') {
+          result.status = 'capture_success_send_failed';
+        }
+      });
+    }
+    
+    // Clean up - remove temporary files
+    for (const imgData of capturedImages) {
+      setTimeout(async () => {
+        try {
+          await fs.unlink(imgData.imagePath);
+        } catch (err) {
+          console.error('Error removing temporary file:', err);
+        }
+      }, 60000); // Remove after 1 minute
+    }
+  }
+  
+  // Send final summary
+  const successCount = results.filter(r => r.status === 'success').length;
+  const failCount = results.filter(r => r.status === 'failed').length;
+  const partialCount = results.filter(r => r.status === 'capture_success_send_failed').length;
+  
+  await msg.reply(formatMessage({
+    title: '📊 Capture Summary',
+    body: `
+✅ Successful: ${successCount}
+${partialCount > 0 ? `⚠️ Captured but send failed: ${partialCount}\n` : ''}❌ Failed: ${failCount}
+📱 Total cameras: ${results.length}`,
+    footer: `Completed at ${new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}`
+  }));
 }
 
 /**
@@ -926,10 +1260,18 @@ module.exports = {
       return `${name} (${type})`;
     }).join(', ');
     
+    // Register individual camera command
     commandHandler.register(
       '!camera', 
       handleCameraCommand, 
-      `Toma una captura de la cámara y la envía: !camera [nombre_camara]. Cámaras disponibles: ${availableCameras}`
+      `Take a snapshot from a specific camera: !camera [camera_name]. Available cameras: ${availableCameras}`
+    );
+    
+    // Register all cameras command
+    commandHandler.register(
+      '!allcameras', 
+      handleCamerasCommand, 
+      `Take snapshots from all configured cameras at once. Available cameras: ${availableCameras}`
     );
   }
 };

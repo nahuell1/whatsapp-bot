@@ -8,44 +8,8 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "homeassistant.local:192.168.1.100"  # Reemplaza con la IP real de tu Home Assistant
-    environment:
-      # API Connection Settings
-      - OLLAMA_API_URL=${OLLAMA_API_URL:-http://localhost:11434}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_ORG_ID=${OPENAI_ORG_ID}
-      
-      # Default AI Provider and Model
-      - DEFAULT_AI_PROVIDER=${DEFAULT_AI_PROVIDER:-ollama}
-      - DEFAULT_AI_MODEL=${DEFAULT_AI_MODEL:-mi-bot}
-      
-      # Intent Detection Model
-      - INTENT_AI_PROVIDER=${INTENT_AI_PROVIDER:-${DEFAULT_AI_PROVIDER:-ollama}}
-      - INTENT_AI_MODEL=${INTENT_AI_MODEL:-${DEFAULT_AI_MODEL:-mi-bot}}
-      
-      # Chat Model (for conversations)
-      - CHAT_AI_PROVIDER=${CHAT_AI_PROVIDER:-${DEFAULT_AI_PROVIDER:-ollama}}
-      - CHAT_AI_MODEL=${CHAT_AI_MODEL:-${DEFAULT_AI_MODEL:-mi-bot}}
-      
-      # Function Model (for commands/webhooks)
-      - FUNCTION_AI_PROVIDER=${FUNCTION_AI_PROVIDER:-${DEFAULT_AI_PROVIDER:-ollama}}
-      - FUNCTION_AI_MODEL=${FUNCTION_AI_MODEL:-${DEFAULT_AI_MODEL:-mi-bot}}
-      
-      # Bot Configuration
-      - PORT=${PORT:-3000}
-      - COMMAND_PREFIX=${COMMAND_PREFIX:-!ia}
-      - HOMEASSISTANT_URL=${HOMEASSISTANT_URL:-http://homeassistant.local:8123}
-      - AREA_CONTROL_WEBHOOK_ID=${AREA_CONTROL_WEBHOOK_ID:-area_control}
-      - ADMIN_NUMBERS=${ADMIN_NUMBERS}
-      - ENABLE_FUNCTION_CALLS=${ENABLE_FUNCTION_CALLS:-true}
-      - DEFAULT_CITY=${DEFAULT_CITY:-Madrid}
-      - DEFAULT_LATITUDE=${DEFAULT_LATITUDE:-40.416775}
-      - DEFAULT_LONGITUDE=${DEFAULT_LONGITUDE:--3.703790}
-      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-      # Camera Configuration
-      - CAMERA_IP=${CAMERA_IP:-192.168.0.43}
-      - CAMERA_PORT=${CAMERA_PORT:-554}
-      - CAMERA_USERNAME=${CAMERA_USERNAME:-admin}
-      - CAMERA_PASSWORD=${CAMERA_PASSWORD}
+    env_file:
+      - .env
     volumes:
       - ./session:/app/session
     # Uncomment for debugging

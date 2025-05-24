@@ -41,7 +41,7 @@ function formatDate(dateString) {
   if (!dateString) return 'N/A';
   
   const date = new Date(dateString);
-  return date.toLocaleString();
+  return date.toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
 }
 
 /**
@@ -123,7 +123,7 @@ async function handleOpenAIUsageCommand(msg, args) {
     
     // API Key status
     body += `*Estado de la API:* ${data.apiKeyValid ? '✅ Activo' : '❌ Inactivo'}\n`;
-    body += `*Fecha de verificación:* ${new Date(data.date).toLocaleDateString()}\n\n`;
+    body += `*Fecha de verificación:* ${new Date(data.date).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}\n\n`;
     
     // Models information
     if (data.modelsAvailable > 0) {

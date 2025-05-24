@@ -117,13 +117,20 @@ class CommandHandler {
    */
   getHelpText() {
     if (this.helpMessages.length === 0) {
-      return "No commands are registered.";
+      return "No hay comandos registrados.";
     }
     
     // Sort help messages alphabetically for easier reading
     const sortedMessages = [...this.helpMessages].sort();
     
-    return "Available commands:\n" + sortedMessages.join("\n");
+    // Format each command nicely
+    const formattedMessages = sortedMessages.map(msg => {
+      const [command, ...descParts] = msg.split(': ');
+      const description = descParts.join(': ');
+      return `*${command}*\n${description}\n`;
+    });
+    
+    return formattedMessages.join('\n');
   }
 
   /**

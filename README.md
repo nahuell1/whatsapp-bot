@@ -56,10 +56,6 @@ The bot supports multiple commands:
   ```
   Control Home Assistant areas through the configured webhook.
 
-- **Camera Snapshot**:
-  ```
-  Take a snapshot from the configured camera and send it as a WhatsApp message.
-
 - **Home Assistant Control**:
   ```
   !area office on
@@ -67,11 +63,40 @@ The bot supports multiple commands:
   ```
   Control Home Assistant areas through the configured webhook.
 
-- **Camera Snapshot**:
+### Camera Management
+
+The bot supports multiple camera types and protocols with automatic discovery and fallback mechanisms:
+
+- **Single Camera Snapshot**:
   ```
   !camera
   ```
-  Take a snapshot from the configured camera and send it as a WhatsApp message.
+  Take a snapshot from the default camera.
+
+- **Specific Camera Snapshot**:
+  ```
+  !camera kitchen
+  !camera android
+  ```
+  Take a snapshot from a specific named camera.
+
+- **List All Cameras**:
+  ```
+  !allcameras
+  ```
+  Discover and test all configured cameras, showing their status and capabilities.
+
+#### Supported Camera Types:
+- **RTSP**: Real-Time Streaming Protocol cameras
+- **MJPEG**: Motion JPEG streaming cameras  
+- **ONVIF**: Open Network Video Interface Forum cameras with automatic endpoint discovery
+- **TAPO**: TP-Link TAPO cloud cameras
+
+#### Camera Configuration Features:
+- **Automatic Discovery**: System automatically discovers camera capabilities
+- **Protocol Fallback**: If primary protocol fails, system tries alternative methods
+- **ONVIF Discovery**: Automatic detection of ONVIF endpoints when path not specified
+- **Multi-Protocol Support**: Compare performance between different protocols (e.g., RTSP vs ONVIF)
 
 ### Weather Information
 
@@ -133,6 +158,38 @@ The bot supports multiple commands:
 | DEFAULT_CITY | Default city for weather command | Buenos Aires |
 | DEFAULT_LATITUDE | Default latitude for weather location | 40.416775 |
 | DEFAULT_LONGITUDE | Default longitude for weather location | -3.703790 |
+
+### Camera Configuration
+
+The bot supports multiple camera configurations with automatic discovery. Use the pattern `CAMERA_[NAME]_[SETTING]` to configure cameras:
+
+| Variable Pattern | Description | Example |
+|-----------------|-------------|---------|
+| **Basic Camera Settings** | | |
+| CAMERA_[NAME]_IP | Camera IP address | CAMERA_KITCHEN_IP=192.168.0.45 |
+| CAMERA_[NAME]_PORT | Camera port | CAMERA_KITCHEN_PORT=80 |
+| CAMERA_[NAME]_USERNAME | Camera username | CAMERA_KITCHEN_USERNAME=admin |
+| CAMERA_[NAME]_PASSWORD | Camera password | CAMERA_KITCHEN_PASSWORD=password |
+| CAMERA_[NAME]_TYPE | Camera protocol type | CAMERA_KITCHEN_TYPE=onvif |
+| CAMERA_[NAME]_PATH | Custom path (optional) | CAMERA_KITCHEN_PATH=/shot.jpg |
+| **Legacy Camera Settings** | | |
+| CAMERA_IP | Default/primary camera IP | 192.168.0.43 |
+| CAMERA_USERNAME | Default camera username | admin1 |
+| CAMERA_PASSWORD | Default camera password | password |
+| CAMERA_CLOUD_PASSWORD | TAPO cloud password | password |
+| CAMERA2_IP | Secondary MJPEG camera IP | 192.168.0.48 |
+| CAMERA2_PORT | Secondary camera port | 8081 |
+| CAMERA2_PATH | MJPEG stream path | ?action=stream |
+| CAMERA2_TYPE | Secondary camera type | mjpeg |
+
+#### Supported Camera Types:
+- **rtsp**: Real-Time Streaming Protocol
+- **mjpeg**: Motion JPEG streaming  
+- **onvif**: ONVIF protocol with auto-discovery
+- **tapo**: TP-Link TAPO cloud cameras
+
+#### Special Password Considerations:
+- Passwords containing `$` characters must be escaped with `$$` in `.env` files
 
 ### Webhook External IDs
 

@@ -15,11 +15,18 @@
  * @param {string} args - Command arguments (not used for help command)
  * @returns {Promise<void>}
  */
-function handleHelpCommand(msg, args) {
+async function handleHelpCommand(msg, args) {
   try {
     // "this" context is bound to commandHandler when registered
     const helpText = this.getHelpText();
-    return msg.reply(helpText);
+    
+    const { formatMessage } = require('./utils');
+    
+    await msg.reply(formatMessage({
+      title: '🤖 Comandos Disponibles',
+      body: helpText,
+      footer: 'Usa cualquiera de estos comandos para interactuar con el bot'
+    }));
   } catch (error) {
     console.error('Error generating help text:', error);
     return msg.reply('Error generating help: ' + error.message);
