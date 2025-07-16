@@ -97,9 +97,18 @@ class CommandHandler {
           // Handle command execution errors gracefully
           console.error(`Error executing command ${prefix}:`, error);
           try {
-            await msg.reply(`Error executing command: ${error.message}`);
+            // Use a safer reply method that doesn't rely on chat.sendMessage
+            const errorMsg = `❌ Error: ${error.message}`;
+            await msg.reply(errorMsg);
           } catch (replyError) {
             console.error('Failed to send error reply:', replyError);
+            // Try alternative method if reply fails
+            try {
+              const chat = await msg.getChat();
+              await chat.sendMessage(`❌ Command failed: ${error.message}`);
+            } catch (altError) {
+              console.error('All reply methods failed:', altError);
+            }
           }
           return true; // Still count as handled even if it failed
         }

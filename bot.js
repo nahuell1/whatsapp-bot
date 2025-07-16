@@ -5,6 +5,19 @@
  * @module bot
  */
 require('dotenv').config();
+
+// Global error handlers to prevent process crashes
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  console.error('Stack:', error.stack);
+  // Don't exit the process, just log the error
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit the process, just log the error
+});
+
 const fs = require('fs');
 const path = require('path');
 const qrcode = require('qrcode');
@@ -233,7 +246,11 @@ client.on('message', async msg => {
       // If the message starts with the command prefix but wasn't handled
       if (msg.body.startsWith(CONFIG.COMMAND_PREFIX)) {
         console.log('No command matched, but message has command prefix');
-        msg.reply('Comando no reconocido. Envía !help para ver los comandos disponibles.');
+        try {
+          await msg.reply('Comando no reconocido. Envía !help para ver los comandos disponibles.');
+        } catch (replyError) {
+          console.error('Error sending unrecognized command reply:', replyError);
+        }
       } 
       // If message doesn't start with a command prefix, handle as chatbot
       else if (!msg.body.startsWith('!')) {
@@ -243,9 +260,13 @@ client.on('message', async msg => {
     }
   } catch (error) {
     console.error('Error processing message:', error);
-    // Only reply with error if in development mode
-    if (process.env.NODE_ENV === 'development') {
-      msg.reply('❌ Error processing message: ' + error.message);
+    // Don't try to reply on critical errors to avoid infinite loops
+    if (error.message && !error.message.includes('serialize') && !error.message.includes('Evaluation failed')) {
+      try {
+        await msg.reply('❌ Error processing message.');
+      } catch (replyError) {
+        console.error('Error sending error message:', replyError);
+      }
     }
   }
 });

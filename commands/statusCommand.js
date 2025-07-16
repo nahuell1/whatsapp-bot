@@ -241,17 +241,33 @@ async function handleStatusCommand(msg) {
   // Check connected services
   statusMessage += `*Services:*\n`;
   
-  // Check all AI services in the multi-model configuration
-  const aiProviders = ['DEFAULT', 'INTENT', 'CHAT', 'FUNCTION'];
-  for (const provider of aiProviders) {
-    const providerName = provider === 'DEFAULT' ? 'Ollama' : `${provider} (${CONFIG[`${provider}_AI_PROVIDER`].toUpperCase()})`;
-    const modelName = CONFIG[`${provider}_AI_MODEL`];
-    
-    // Check availability of the service
-    const isAvailable = await checkServiceAvailable(CONFIG[`${provider}_API_URL`], providerName);
-    statusMessage += `${providerName} API: ${isAvailable ? '✅ Online' : '❌ Offline'}\n`;
-    statusMessage += `Model: ${modelName}\n`;
+  // Check AI services based on provider
+  const providers = {
+    'INTENT': CONFIG.INTENT_AI_PROVIDER,
+    'CHAT': CONFIG.CHAT_AI_PROVIDER, 
+    'FUNCTION': CONFIG.FUNCTION_AI_PROVIDER
+  };
+  
+  // Check Ollama if any provider uses it
+  const usesOllama = Object.values(providers).some(p => p === 'ollama') || CONFIG.DEFAULT_AI_PROVIDER === 'ollama';
+  if (usesOllama && CONFIG.OLLAMA_API_URL) {
+    const isAvailable = await checkServiceAvailable(CONFIG.OLLAMA_API_URL, 'Ollama');
+    statusMessage += `Ollama API: ${isAvailable ? '✅ Online' : '❌ Offline'}\n`;
+    statusMessage += `URL: ${CONFIG.OLLAMA_API_URL}\n`;
   }
+  
+  // Check OpenAI if any provider uses it
+  const usesOpenAI = Object.values(providers).some(p => p === 'openai') || CONFIG.DEFAULT_AI_PROVIDER === 'openai';
+  if (usesOpenAI && CONFIG.OPENAI_API_KEY) {
+    // OpenAI doesn't need URL check, just show if key is configured
+    statusMessage += `OpenAI API: ${CONFIG.OPENAI_API_KEY ? '✅ Key configured' : '❌ No API key'}\n`;
+  }
+  
+  // Show model configuration
+  statusMessage += `\n*AI Models:*\n`;
+  statusMessage += `Intent: ${CONFIG.INTENT_AI_MODEL} (${CONFIG.INTENT_AI_PROVIDER})\n`;
+  statusMessage += `Chat: ${CONFIG.CHAT_AI_MODEL} (${CONFIG.CHAT_AI_PROVIDER})\n`;
+  statusMessage += `Function: ${CONFIG.FUNCTION_AI_MODEL} (${CONFIG.FUNCTION_AI_PROVIDER})\n`;
   
   // Check Home Assistant - use our more reliable method
   const homeAssistantStatus = await getHomeAssistantStatus();

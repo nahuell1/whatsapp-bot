@@ -1188,16 +1188,26 @@ async function handleCamerasCommand(msg) {
       const currentTime = new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
       
       if (capturedImages.length === 1) {
-        // Single image
-        await chat.sendMessage(capturedImages[0].media, { 
+        // Single image - use msg.reply instead of chat.sendMessage to avoid serialization issues
+        await msg.reply(capturedImages[0].media, undefined, { 
           caption: `${cameraDetails}\nCaptured: ${currentTime}` 
         });
       } else {
-        // Multiple images - send them as an album/group
-        const mediaArray = capturedImages.map(img => img.media);
-        
-        for (const imgData of capturedImages) {
-          await chat.sendMessage(imgData.media);
+        // Multiple images - send them one by one with a small delay
+        for (let i = 0; i < capturedImages.length; i++) {
+          const imgData = capturedImages[i];
+          const caption = i === 0 ? `${cameraDetails}\nCaptured: ${currentTime}` : '';
+          
+          try {
+            await msg.reply(imgData.media, undefined, caption ? { caption } : undefined);
+            // Small delay between images to avoid overwhelming WhatsApp
+            if (i < capturedImages.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+          } catch (sendError) {
+            console.error(`Error sending image ${imgData.cameraName}:`, sendError);
+            // Continue with next image
+          }
         }
       }
     } catch (mediaError) {
